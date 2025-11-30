@@ -39,4 +39,12 @@ add_dependencies(mac_fileprovider opencloud)
 add_custom_command(TARGET mac_fileprovider POST_BUILD COMMAND ${CMAKE_COMMAND}
     ARGS -E copy_directory "${CMAKE_CURRENT_BINARY_DIR}/${XCODE_CONFIG}/FileProviderExt.appex" "$<TARGET_FILE_DIR:opencloud>/../PlugIns/FileProviderExt.appex")
 
+# Install extensions into the installed app bundle
+install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${XCODE_CONFIG}/FinderSyncExt.appex"
+    DESTINATION "${KDE_INSTALL_BUNDLEDIR}/${APPLICATION_SHORTNAME}.app/Contents/PlugIns"
+    USE_SOURCE_PERMISSIONS)
+install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${XCODE_CONFIG}/FileProviderExt.appex"
+    DESTINATION "${KDE_INSTALL_BUNDLEDIR}/${APPLICATION_SHORTNAME}.app/Contents/PlugIns"
+    USE_SOURCE_PERMISSIONS)
+
 endif()

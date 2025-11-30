@@ -82,11 +82,11 @@ public:
     self = [super init];
     if (self) {
         self.wrapper = wrapper;
-        
+
         // Connect back to the client using their endpoint
         self.clientConnection = [[NSXPCConnection alloc] initWithListenerEndpoint:endpoint];
         self.clientConnection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SyncClientXPCFromServer)];
-        
+
         __weak typeof(self) weakSelf = self;
         self.clientConnection.interruptionHandler = ^{
             NSLog(@"XPCClientConnection: Connection interrupted");
@@ -102,7 +102,7 @@ public:
                 Q_EMIT weakSelf.wrapper->q_ptr->disconnected();
             }
         };
-        
+
         [self.clientConnection resume];
     }
     return self;
@@ -110,9 +110,8 @@ public:
 
 - (void)sendMessage:(NSData *)msg
 {
-    id<SyncClientXPCFromServer> client = [self.clientConnection remoteObjectProxyWithErrorHandler:^(NSError *error) {
-        NSLog(@"XPCClientConnection: Error sending message: %@", error);
-    }];
+    id<SyncClientXPCFromServer> client =
+        [self.clientConnection remoteObjectProxyWithErrorHandler:^(NSError *error) { NSLog(@"XPCClientConnection: Error sending message: %@", error); }];
     [client sendMessage:msg];
 }
 
@@ -145,7 +144,7 @@ public:
     // Configure the connection to receive messages from the client
     newConnection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SyncClientXPCToServer)];
     newConnection.exportedObject = self;
-    
+
     [newConnection resume];
     return YES;
 }
@@ -187,9 +186,7 @@ SocketApiSocket::SocketApiSocket(QObject *parent, SocketApiSocketPrivate *p)
     open(ReadWrite);
 }
 
-SocketApiSocket::~SocketApiSocket()
-{
-}
+SocketApiSocket::~SocketApiSocket() { }
 
 qint64 SocketApiSocket::readData(char *data, qint64 maxlen)
 {
@@ -258,9 +255,7 @@ SocketApiServer::SocketApiServer()
     d->q_ptr = this;
 }
 
-SocketApiServer::~SocketApiServer()
-{
-}
+SocketApiServer::~SocketApiServer() { }
 
 void SocketApiServer::close()
 {
@@ -272,48 +267,69 @@ bool SocketApiServer::listen(const QString &name)
 {
     Q_D(SocketApiServer);
     d->serviceName = name;
-    
+
+    NSLog(@"SocketApiServer: listen() called with name: %@", name.toNSString());
+
     // Use an anonymous listener instead of a named Mach service
     // This avoids the need for launchd registration
     d->listener = [NSXPCListener anonymousListener];
     d->listener.delegate = d->server;
     [d->listener resume];
-    
+
+    NSLog(@"SocketApiServer: Anonymous listener created and resumed");
+
     // Serialize the endpoint to a file that clients can read
     // The file is placed in a location accessible to both the app and extensions
     NSXPCListenerEndpoint *endpoint = d->listener.endpoint;
-    if (endpoint) {
-        NSError *archiveError = nil;
-        // NSXPCListenerEndpoint doesn't support secure coding, use legacy archiver
-        NSData *endpointData = [NSKeyedArchiver archivedDataWithRootObject:endpoint
-                                                     requiringSecureCoding:NO
-                                                                     error:&archiveError];
-        if (archiveError) {
-            NSLog(@"SocketApiServer: Failed to archive endpoint: %@", archiveError);
-        }
-        if (endpointData) {
-            // Write to user's Application Support directory
-            NSArray *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES);
-            if (paths.count > 0) {
-                NSString *appSupport = [paths firstObject];
-                NSString *endpointDir = [appSupport stringByAppendingPathComponent:@"OpenCloud"];
-                
-                // Create directory if it doesn't exist
-                [[NSFileManager defaultManager] createDirectoryAtPath:endpointDir
-                                          withIntermediateDirectories:YES
-                                                           attributes:nil
-                                                                error:nil];
-                
-                // Write endpoint file with the service name
-                NSString *endpointFile = [endpointDir stringByAppendingPathComponent:
-                    [NSString stringWithFormat:@"%@.endpoint", name.toNSString()]];
-                [endpointData writeToFile:endpointFile atomically:YES];
-                
-                NSLog(@"SocketApiServer: Wrote XPC endpoint to %@", endpointFile);
-            }
-        }
+    if (!endpoint) {
+        NSLog(@"SocketApiServer: ERROR - listener.endpoint is nil!");
+        return YES;
     }
-    
+
+    NSError *archiveError = nil;
+    // NSXPCListenerEndpoint doesn't support secure coding, use legacy archiver
+    NSData *endpointData = [NSKeyedArchiver archivedDataWithRootObject:endpoint requiringSecureCoding:NO error:&archiveError];
+    if (archiveError) {
+        NSLog(@"SocketApiServer: Failed to archive endpoint: %@", archiveError);
+        return YES;
+    }
+    if (!endpointData) {
+        NSLog(@"SocketApiServer: ERROR - endpoint data is nil after archiving!");
+        return YES;
+    }
+
+    NSLog(@"SocketApiServer: Endpoint archived, %lu bytes", (unsigned long)endpointData.length);
+
+    // Write to user's Application Support directory
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES);
+    if (paths.count == 0) {
+        NSLog(@"SocketApiServer: ERROR - Could not find Application Support directory!");
+        return YES;
+    }
+
+    NSString *appSupport = [paths firstObject];
+    NSString *endpointDir = [appSupport stringByAppendingPathComponent:@"OpenCloud"];
+
+    NSLog(@"SocketApiServer: Will write endpoint to directory: %@", endpointDir);
+
+    // Create directory if it doesn't exist
+    NSError *dirError = nil;
+    BOOL dirCreated = [[NSFileManager defaultManager] createDirectoryAtPath:endpointDir withIntermediateDirectories:YES attributes:nil error:&dirError];
+    if (!dirCreated && dirError) {
+        NSLog(@"SocketApiServer: Failed to create directory: %@", dirError);
+    }
+
+    // Write endpoint file with the service name
+    NSString *endpointFile = [endpointDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.endpoint", name.toNSString()]];
+
+    NSError *writeError = nil;
+    BOOL written = [endpointData writeToFile:endpointFile options:NSDataWritingAtomic error:&writeError];
+    if (written) {
+        NSLog(@"SocketApiServer: Successfully wrote XPC endpoint to %@", endpointFile);
+    } else {
+        NSLog(@"SocketApiServer: FAILED to write endpoint file: %@", writeError);
+    }
+
     return YES;
 }
 

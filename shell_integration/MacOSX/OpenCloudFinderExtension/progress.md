@@ -1,8 +1,9 @@
 # OpenCloud macOS Extensions – Progress
 
 ## Current Status
-- FileProviderExt: Integrated into core app build; domain registers on app launch; PoC enumeration works; app reports version 3.1.1 ✅
-- FinderSyncExt: XPC rework in progress (anonymous listener + endpoint file); badges/menus pending reconnection ⚠️
+- FileProviderExt: Integrated into core app build; domain registers on app launch; PoC enumeration works ✅
+- FinderSyncExt: **Blocked** – XPC endpoint serialization approach failed; switching to Unix socket ⚠️
+- App version: 3.1.2 (bumped to force rebuild)
 
 ## What Works
 
@@ -12,43 +13,130 @@
 - Enumeration returns demo items (README.md, Welcome.txt, Documents/, Photos/)
 - `fetchContents` hydrates a temp file for demo
 - macOS 26 compatibility: required `NSFileProviderReplicatedExtension` methods implemented; `NSExtensionFileProviderSupportsEnumeration` set
-- Installed app reports: `OpenCloud 3.1.1`
 
 ### FinderSyncExt
 - Extension loads and can be enabled in System Settings → Extensions
 - IPC migration complete (NSConnection → NSXPCConnection)
-- New connection model: client creates anonymous listener; server accepts and sends messages
 
-## New Work (Nov 30, 2025)
-- Integrate both extensions into core app (CMake); auto domain registration
-- Remove sandbox entitlement for local development (both extensions) so they can be toggled on/off reliably
-- XPC server: switch to `NSXPCListener.anonymousListener()` and serialize endpoint to file
-  - Intended endpoint file: `~/Library/Application Support/OpenCloud/<service>.endpoint`
-- XPC client (FinderSyncExt): read endpoint file and connect via `initWithListenerEndpoint:`
-- Fix endpoint (de)serialization to use non-secure coding for `NSXPCListenerEndpoint`
-- Force clean Craft rebuild; app now shows 3.1.1
+## Critical Discovery (Nov 30, 2025)
 
-## Current Gaps / Investigations
-- FinderSyncExt still not attaching: endpoint file not present yet
-  - Hypothesis: server write path not executed or wrong location for extension sandbox access
-  - Next: move endpoint file into a shared App Group container and enable the same group for the main app and extension
-- FileProviderExt still returns demo data
-  - Next: wire enumeration/fetch to sync engine (journal) and implement on-demand hydration (download when opened)
-- Display name in `fileproviderctl dump` shows "desktopclient" (cosmetic)
+### NSXPCListenerEndpoint Cannot Be Serialized to File
+**Problem:** `NSXPCListenerEndpoint` throws exception when archived with `NSKeyedArchiver`:
+```
+Caught exception during archival: *** -[NSXPCListenerEndpoint encodeWithCoder:]: 
+This class may only be encoded by an NSXPCCoder.
+```
 
-## Next Steps
-1. FinderSync XPC handshake
-   - Write endpoint to shared App Group container (e.g. `~/Library/Group Containers/<TEAM>.<rev_domain>/OpenCloud/socketapi.endpoint`)
-   - Add App Group entitlement to main app; keep extension groups in sync
-   - Add logging around server `listen()` and endpoint write; verify creation
-2. FileProvider VFS (on‑demand like Windows)
-   - Enumeration: pull from sync journal via socket API
-   - Hydration: implement `fetchContents` to download the file to a temp URL and return it
-   - States: expose `isDownloaded/isDownloading/isUploaded/isUploading` correctly
-   - Signaling: call `NSFileProviderManager.signalEnumerator` on changes
-3. UX polish
-   - Ensure domain visible under Finder → Locations
-   - Progress reporting via `NSProgress` from fetch/upload
+**Root cause:** Apple restricts `NSXPCListenerEndpoint` to only be serialized over XPC connections themselves. You cannot write it to a file for another process to read.
+
+**Implication:** Our approach of writing endpoint to `~/Library/Application Support/OpenCloud/<service>.endpoint` is fundamentally flawed.
+
+### Solution: Follow Nextcloud's Architecture
+
+Analyzed `nextcloud-desktop` repo which has working macOS FileProvider + FinderSync:
+
+#### 1. FinderSyncExt → Main App: Unix Domain Socket
+Nextcloud uses **Unix domain sockets** (not XPC) for FinderSync communication:
+- Socket file in App Group container: `~/Library/Group Containers/<TEAM>.<id>/.socket`
+- `LocalSocketClient.m` - async socket client using `dispatch_source`
+- Main app creates socket server, extension connects as client
+- Line-based protocol (same as our existing socket API)
+
+**Key code from Nextcloud:**
+```objc
+// FinderSync.m - get socket path from App Group container
+NSURL *container = [[NSFileManager defaultManager] 
+    containerURLForSecurityApplicationGroupIdentifier:socketApiPrefix];
+NSURL *socketPath = [container URLByAppendingPathComponent:@".socket" isDirectory:NO];
+self.localSocketClient = [[LocalSocketClient alloc] initWithSocketPath:socketPath.path ...];
+```
+
+#### 2. Main App → FileProviderExt: NSFileProviderServiceSource
+Nextcloud uses Apple's built-in **FileProvider Service** mechanism:
+- Extension exposes `NSFileProviderServiceSource` (e.g., `ClientCommunicationService.swift`)
+- Main app connects via `NSFileProviderManager.getServiceWithName()` or `NSFileManager.getFileProviderServicesForItemAtURL()`
+- XPC connection is managed by the system – no manual endpoint passing!
+
+**Key code from Nextcloud:**
+```swift
+// ClientCommunicationService.swift - in FileProviderExt
+class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCListenerDelegate {
+    let listener = NSXPCListener.anonymous()
+    let serviceName = NSFileProviderServiceName("com.nextcloud.desktopclient.ClientCommunicationService")
+    
+    func makeListenerEndpoint() throws -> NSXPCListenerEndpoint {
+        listener.delegate = self
+        listener.resume()
+        return listener.endpoint  // System handles passing this!
+    }
+}
+```
+
+```objc
+// fileproviderxpc_mac_utils.mm - in main app
+[manager getServiceWithName:@"com.nextcloud.desktopclient.ClientCommunicationService"
+             itemIdentifier:NSFileProviderRootContainerItemIdentifier
+          completionHandler:^(NSFileProviderService *service, NSError *error) {
+    [service getFileProviderConnectionWithCompletionHandler:^(NSXPCConnection *connection, NSError *error) {
+        // Now we have XPC connection to the extension!
+    }];
+}];
+```
+
+## Revised Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         OpenCloud.app (Main)                         │
+│  ┌──────────────────┐  ┌────────────────────┐  ┌─────────────────┐  │
+│  │   AccountManager │  │ FileProviderDomain │  │   SyncEngine    │  │
+│  │                  │  │     Manager        │  │                 │  │
+│  └────────┬─────────┘  └─────────┬──────────┘  └────────┬────────┘  │
+│           │                      │                       │          │
+│           └──────────────────────┼───────────────────────┘          │
+│                                  │                                   │
+│  ┌───────────────────────────────┼───────────────────────────────┐  │
+│  │         Unix Socket Server    │    FileProvider XPC Client    │  │
+│  │    (for FinderSyncExt)        │  (via NSFileProviderManager)  │  │
+│  └───────────────┬───────────────┴──────────────┬────────────────┘  │
+└──────────────────┼──────────────────────────────┼───────────────────┘
+                   │ Unix Socket                  │ System-managed XPC
+                   │ (App Group)                  │ (NSFileProviderServiceSource)
+┌──────────────────┼──────────────────────────────┼───────────────────┐
+│ FinderSyncExt    │           FileProviderExt    │                   │
+│  ┌───────────────┴──┐        ┌──────────────────┴────────────────┐  │
+│  │ LocalSocketClient│        │ ClientCommunicationService        │  │
+│  │ (badges/menus)   │        │ (exposes NSFileProviderServiceSrc)│  │
+│  └──────────────────┘        └───────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## Next Steps (Revised)
+
+### Phase 1: Fix FinderSyncExt with Unix Socket
+1. **Create `LocalSocketClient` class** (port from Nextcloud's `NCDesktopClientSocketKit`)
+   - Async Unix domain socket client using `dispatch_source`
+   - Line-based protocol processor
+2. **Modify main app socket server** to use Unix socket in App Group container
+   - Change from XPC to `AF_LOCAL` socket
+   - Socket path: `~/Library/Group Containers/<TEAM>.eu.opencloud.desktop/.socket`
+3. **Update FinderSyncExt** to use `LocalSocketClient` instead of XPC
+4. **Add App Group entitlements** to main app and FinderSyncExt
+
+### Phase 2: FileProviderExt Real Integration
+1. **Add `ClientCommunicationService`** to FileProviderExt
+   - Implement `NSFileProviderServiceSource`
+   - Expose XPC service for main app to configure account
+2. **Main app XPC client** using `NSFileProviderManager.getServiceWithName()`
+3. **Wire enumeration to sync journal** via the service connection
+4. **Implement on-demand download** in `fetchContents`
+
+### Phase 3: Full VFS Features
+- Download states (cloud-only, downloading, downloaded)
+- Upload handling (`createItem`, `modifyItem`)
+- Eviction/offloading (like iCloud)
+- Progress reporting
+- Conflict resolution
 
 ## Architecture
 ```
