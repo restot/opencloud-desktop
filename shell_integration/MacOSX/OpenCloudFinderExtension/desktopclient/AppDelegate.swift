@@ -21,8 +21,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let domainIdentifier = NSFileProviderDomainIdentifier("OpenCloud")
         let domain = NSFileProviderDomain(identifier: domainIdentifier, displayName: "OpenCloud")
         
-        // First remove any existing domain with same identifier to ensure clean state
-        NSFileProviderManager.remove(domain) { _ in
+        // First remove any existing domain to ensure clean state
+        NSFileProviderManager.remove(domain) { removeError in
+            if let removeError = removeError {
+                NSLog("Note: Remove domain returned: %@", removeError.localizedDescription)
+            }
+            
             // Now add the domain
             NSFileProviderManager.add(domain) { error in
                 if let error = error {
@@ -31,7 +35,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     logger.info("✅ FileProvider domain 'OpenCloud' registered successfully!")
                     NSLog("✅ FileProvider domain 'OpenCloud' registered successfully!")
-                    NSLog("   Check Finder sidebar under 'Locations')")
+                    
+                    // Try to get the manager and signal enumerator to activate
+                    if let manager = NSFileProviderManager(for: domain) {
+                        NSLog("   Got NSFileProviderManager for domain")
+                        
+                        // Signal the root container to start enumeration
+                        manager.signalEnumerator(for: .rootContainer) { signalError in
+                            if let signalError = signalError {
+                                NSLog("   Signal enumerator error: %@", signalError.localizedDescription)
+                            } else {
+                                NSLog("   ✅ Signaled root container enumerator")
+                            }
+                        }
+                        
+                        // Also signal working set
+                        manager.signalEnumerator(for: .workingSet) { signalError in
+                            if let signalError = signalError {
+                                NSLog("   Signal working set error: %@", signalError.localizedDescription)
+                            } else {
+                                NSLog("   ✅ Signaled working set enumerator")
+                            }
+                        }
+                    } else {
+                        NSLog("   ⚠️ Could not get NSFileProviderManager for domain")
+                    }
                 }
                 
                 // List all registered domains

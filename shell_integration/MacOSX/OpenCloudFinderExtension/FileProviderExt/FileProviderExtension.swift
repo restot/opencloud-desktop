@@ -157,6 +157,20 @@ import OSLog
         return FileProviderEnumerator(enumeratedItemIdentifier: containerItemIdentifier, domain: domain)
     }
     
+    // MARK: - Materialized Items
+    
+    /// Called to ask for pending items to be provided
+    func materializedItemsDidChange(completionHandler: @escaping () -> Void) {
+        logger.debug("Materialized items did change")
+        completionHandler()
+    }
+    
+    /// Called when pending items change
+    func pendingItemsDidChange(completionHandler: @escaping () -> Void) {
+        logger.debug("Pending items did change")
+        completionHandler()
+    }
+    
     // MARK: - Communication with Main App
     
     func sendDomainIdentifier() {
