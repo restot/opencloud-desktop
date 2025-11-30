@@ -10,27 +10,83 @@ OpenCloud Desktop is a Qt-based C++ desktop synchronization client for OpenCloud
 - **Language**: C++20
 - **Build System**: CMake 3.18+ with KDE ECM (Extra CMake Modules)
 - **Database**: SQLite3
-- **Version**: 3.1.0 (see VERSION.cmake)
+- **Version**: 3.1.1 (see VERSION.cmake)
 
 ## Build System & Development Commands
 
-### Initial Setup
+### Building with Craft (Recommended)
 
-The project uses KDE's Craft build system for CI/CD, but local development uses standard CMake workflows:
+Craft is KDE's meta-build system that handles all dependencies automatically. This is the recommended approach for local development.
+
+#### Prerequisites
 
 ```bash
-# Create build directory
-mkdir build && cd build
+# Install PowerShell (required by Craft scripts)
+brew install powershell/tap/powershell
 
-# Configure with CMake
-cmake .. -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
-
-# Build
-cmake --build .
-
-# Install (optional)
-cmake --build . --target install
+# Clone CraftMaster (if not already present)
+mkdir -p ~/craft/CraftMaster
+git clone --depth=1 https://invent.kde.org/kde/craftmaster.git ~/craft/CraftMaster/CraftMaster
 ```
+
+#### Initial Craft Setup
+
+```bash
+# Set target architecture (use macos-clang-arm64 for Apple Silicon, macos-clang-x86_64 for Intel)
+export CRAFT_TARGET=macos-clang-arm64
+
+# Initialize Craft
+pwsh .github/workflows/.craft.ps1 --setup
+
+# Unshelve cached dependency versions
+pwsh .github/workflows/.craft.ps1 -c --unshelve .craft.shelf
+pwsh .github/workflows/.craft.ps1 -c craft
+
+# Install project dependencies
+pwsh .github/workflows/.craft.ps1 -c --install-deps opencloud/opencloud-desktop
+```
+
+#### Building the Application
+
+```bash
+export CRAFT_TARGET=macos-clang-arm64
+
+# Point Craft to your local source directory
+pwsh .github/workflows/.craft.ps1 -c --set "srcDir=$(pwd)" opencloud/opencloud-desktop
+
+# Configure build options (optional - enables crash reporter, tests, shell integration)
+pwsh .github/workflows/.craft.ps1 -c --set 'args=-DWITH_CRASHREPORTER=ON -DCRASHREPORTER_SUBMIT_URL=http://localhost:8080/submit -DBUILD_TESTING=ON -DBUILD_SHELL_INTEGRATION=ON' opencloud/opencloud-desktop
+
+# Build with max parallelism
+export MAKEFLAGS="-j$(sysctl -n hw.ncpu)"
+export CMAKE_BUILD_PARALLEL_LEVEL=$(sysctl -n hw.ncpu)
+pwsh .github/workflows/.craft.ps1 -c --no-cache opencloud/opencloud-desktop
+```
+
+#### Running the Built Application
+
+```bash
+# macOS
+open ~/Documents/craft/macos-clang-arm64/Applications/KDE/OpenCloud.app
+```
+
+#### Running Tests
+
+```bash
+export CRAFT_TARGET=macos-clang-arm64
+pwsh .github/workflows/.craft.ps1 -c --no-cache --test opencloud/opencloud-desktop
+```
+
+#### Rebuilding After Changes
+
+```bash
+export CRAFT_TARGET=macos-clang-arm64
+pwsh .github/workflows/.craft.ps1 -c --no-cache opencloud/opencloud-desktop
+```
+
+### Alternative: Plain CMake (Advanced)
+
+For development without Craft, you must manually install all dependencies first:
 
 ### Running Tests
 
@@ -232,6 +288,30 @@ GitHub Actions workflow (`.github/workflows/main.yml`) uses:
 - Matrix builds: Windows (MSVC), macOS (Clang/ARM64), Linux (GCC/AppImage)
 - Automated: QML format linting, clang-format linting, clang-tidy analysis
 - Tests run on all platforms via `craft --test`
+
+### Crash Reporter Development
+
+A simple Python crash report server is provided for local development:
+
+```bash
+# Start the crash report server (receives reports on port 8080)
+python3 tools/crash_server.py
+
+# Reports are saved to tools/crash_reports/
+```
+
+The server accepts multipart form data with crash dumps and metadata.
+
+### Craft Directory Structure
+
+When using Craft, files are organized as follows:
+- `~/craft/CraftMaster/` - CraftMaster scripts
+- `~/Documents/craft/macos-clang-arm64/` - Build root for macOS ARM64
+  - `Applications/KDE/OpenCloud.app` - Built application
+  - `lib/` - Built libraries
+  - `bin/` - Built executables and test binaries
+- `~/Documents/craft/downloads/` - Downloaded source archives
+- `~/Documents/craft/blueprints/` - Craft package definitions
 
 ## Common Patterns
 
