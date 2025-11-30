@@ -1,0 +1,41 @@
+.*\.sh
+translations/assistant.*.qm
+translations/designer.*.qm
+translations/linguist.*.qm
+translations/qt_help.*.qm
+translations/qtconnectivity_bg.*.qm
+translations/qtlocation.*.qm
+translations/qtmultimedia.*.qm
+translations/qtscript.*.qm
+translations/qtserialport.*.qm
+
+plugins/bearer/.*
+
+(bin/data|share)/gtk-doc/.*
+(bin/data|share)/glib-2.0/.*
+lib/gettext/.*
+lib/metatypes/.*
+(bin/data|share)/gettext/.*
+(bin/data|share)/gettext-0.19.8/.*
+(bin/data|share)/gdb/.*
+(bin/data|share)/info/.*
+(bin/data|share)/emacs/.*
+(bin/data|share)/aclocal/.*
+(bin/data|share)/bash-completion/.*
+
+translations/qtdeclarative.*.qm
+translations/qtquickcontrols.*.qm
+
+# not needed and the dependency mysql might not be available for deployment
+plugins/sqldrivers/libqsqlmysql.*
+
+# qt 6.5 bug: on macOS object files get installed
+# libs/qt6/qtbase: plugins/permissions/objects-RelWithDebInfo/QDarwinCalendarPermissionPlugin_init/QDarwinCalendarPermissionPlugin_init.cpp.o
+# libs/qt6/qtbase: plugins/permissions/objects-RelWithDebInfo/QDarwinLocationPermissionPlugin_init/QDarwinLocationPermissionPlugin_init.cpp.o
+# libs/qt6/qtbase: plugins/permissions/objects-RelWithDebInfo/QDarwinCameraPermissionPlugin_init/QDarwinCameraPermissionPlugin_init.cpp.o
+# libs/qt6/qtbase: plugins/permissions/objects-RelWithDebInfo/QDarwinMicrophonePermissionPlugin_init/QDarwinMicrophonePermissionPlugin_init.cpp.o
+# libs/qt6/qtbase: plugins/permissions/objects-RelWithDebInfo/QDarwinContactsPermissionPlugin_init/QDarwinContactsPermissionPlugin_init.cpp.o
+# libs/qt6/qtbase: plugins/permissions/objects-RelWithDebInfo/QDarwinBluetoothPermissionPlugin_init/QDarwinBluetoothPermissionPlugin_init.cpp.o
+# libs/qt6/qtbase: lib/objects-RelWithDebInfo/ExampleIconsPrivate_resources_1/.rcc/qrc_example_icons.cpp.o
+# libs/qt6/qtdeclarative: qml/Qt/test/controls/objects-RelWithDebInfo/QuickControlsTestUtilsPrivate_resources_1/.rcc/qrc_qmake_Qt_test_controls.cpp.o
+.*/objects-RelWithDebInfo/.*
