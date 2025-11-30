@@ -69,7 +69,7 @@ class FileProviderSocketLineProcessor: NSObject, LineProcessor {
                 return
             }
             
-            let userAgent = String(details[0])
+            let _ = String(details[0]) // userAgent - reserved for future use
             let user = String(details[1])
             let userId = String(details[2])
             let serverUrl = String(details[3])

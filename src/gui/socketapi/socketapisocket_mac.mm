@@ -15,33 +15,31 @@
 #include "socketapisocket_mac.h"
 #import <Cocoa/Cocoa.h>
 
-@protocol ChannelProtocol <NSObject>
-
+/// Protocol for the extension to send messages to the main app (server)
+@protocol SyncClientXPCToServer <NSObject>
+- (void)registerClientWithEndpoint:(NSXPCListenerEndpoint *)endpoint;
 - (void)sendMessage:(NSData *)msg;
-
 @end
 
-@protocol RemoteEndProtocol <NSObject, ChannelProtocol>
-
-- (void)registerTransmitter:(id)tx;
-
+/// Protocol for the main app (server) to send messages back to the extension
+@protocol SyncClientXPCFromServer <NSObject>
+- (void)sendMessage:(NSData *)msg;
 @end
 
-@interface LocalEnd : NSObject <ChannelProtocol>
+class SocketApiSocketPrivate;
+class SocketApiServerPrivate;
 
-@property (atomic) SocketApiSocketPrivate *wrapper;
-
-- (instancetype)initWithWrapper:(SocketApiSocketPrivate *)wrapper;
-
-@end
-
-@interface Server : NSObject
-
+@interface XPCServer : NSObject <SyncClientXPCToServer, NSXPCListenerDelegate>
 @property (atomic) SocketApiServerPrivate *wrapper;
-
 - (instancetype)initWithWrapper:(SocketApiServerPrivate *)wrapper;
-- (void)registerClient:(NSDistantObject<RemoteEndProtocol> *)remoteEnd;
+@end
 
+@interface XPCClientConnection : NSObject
+@property (atomic) SocketApiSocketPrivate *wrapper;
+@property (nonatomic, strong) NSXPCConnection *clientConnection;
+- (instancetype)initWithWrapper:(SocketApiSocketPrivate *)wrapper endpoint:(NSXPCListenerEndpoint *)endpoint;
+- (void)sendMessage:(NSData *)msg;
+- (void)invalidate;
 @end
 
 class SocketApiSocketPrivate
@@ -49,14 +47,12 @@ class SocketApiSocketPrivate
 public:
     SocketApiSocket *q_ptr;
 
-    SocketApiSocketPrivate(NSDistantObject<ChannelProtocol> *remoteEnd);
+    SocketApiSocketPrivate(NSXPCListenerEndpoint *endpoint);
     ~SocketApiSocketPrivate();
 
-    // release remoteEnd
     void disconnectRemote();
 
-    NSDistantObject<ChannelProtocol> *remoteEnd;
-    LocalEnd *localEnd;
+    XPCClientConnection *clientConnection;
     QByteArray inBuffer;
     bool isRemoteDisconnected = false;
 };
@@ -70,66 +66,115 @@ public:
     ~SocketApiServerPrivate();
 
     QList<SocketApiSocket *> pendingConnections;
-    NSConnection *connection;
-    Server *server;
+    NSXPCListener *listener;
+    XPCServer *server;
+    QString serviceName;
 };
 
 
-@implementation LocalEnd
+@implementation XPCClientConnection
 
 @synthesize wrapper = _wrapper;
+@synthesize clientConnection = _clientConnection;
 
-- (instancetype)initWithWrapper:(SocketApiSocketPrivate *)wrapper
+- (instancetype)initWithWrapper:(SocketApiSocketPrivate *)wrapper endpoint:(NSXPCListenerEndpoint *)endpoint
 {
     self = [super init];
-    self.wrapper = wrapper;
+    if (self) {
+        self.wrapper = wrapper;
+        
+        // Connect back to the client using their endpoint
+        self.clientConnection = [[NSXPCConnection alloc] initWithListenerEndpoint:endpoint];
+        self.clientConnection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SyncClientXPCFromServer)];
+        
+        __weak typeof(self) weakSelf = self;
+        self.clientConnection.interruptionHandler = ^{
+            NSLog(@"XPCClientConnection: Connection interrupted");
+            if (weakSelf.wrapper) {
+                weakSelf.wrapper->disconnectRemote();
+                Q_EMIT weakSelf.wrapper->q_ptr->disconnected();
+            }
+        };
+        self.clientConnection.invalidationHandler = ^{
+            NSLog(@"XPCClientConnection: Connection invalidated");
+            if (weakSelf.wrapper) {
+                weakSelf.wrapper->disconnectRemote();
+                Q_EMIT weakSelf.wrapper->q_ptr->disconnected();
+            }
+        };
+        
+        [self.clientConnection resume];
+    }
     return self;
 }
 
 - (void)sendMessage:(NSData *)msg
 {
-    if (self.wrapper) {
-        self.wrapper->inBuffer += QByteArray::fromRawNSData(msg);
-        Q_EMIT self.wrapper->q_ptr->readyRead();
-    }
+    id<SyncClientXPCFromServer> client = [self.clientConnection remoteObjectProxyWithErrorHandler:^(NSError *error) {
+        NSLog(@"XPCClientConnection: Error sending message: %@", error);
+    }];
+    [client sendMessage:msg];
 }
 
-- (void)connectionDidDie:(NSNotification *)notification
+- (void)invalidate
 {
-    // The NSConnectionDidDieNotification docs say to disconnect from NSConnection here
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
-
-    if (self.wrapper) {
-        self.wrapper->disconnectRemote();
-        Q_EMIT self.wrapper->q_ptr->disconnected();
-    }
+    [self.clientConnection invalidate];
+    self.clientConnection = nil;
 }
+
 @end
 
-@implementation Server
+
+@implementation XPCServer
 
 @synthesize wrapper = _wrapper;
 
 - (instancetype)initWithWrapper:(SocketApiServerPrivate *)wrapper
 {
     self = [super init];
-    self.wrapper = wrapper;
+    if (self) {
+        self.wrapper = wrapper;
+    }
     return self;
 }
 
-- (void)registerClient:(NSDistantObject<RemoteEndProtocol> *)remoteEnd
-{
-    // This saves a few mach messages that would otherwise be needed to query the interface
-    [remoteEnd setProtocolForProxy:@protocol(RemoteEndProtocol)];
+#pragma mark - NSXPCListenerDelegate
 
+- (BOOL)listener:(NSXPCListener *)listener shouldAcceptNewConnection:(NSXPCConnection *)newConnection
+{
+    // Configure the connection to receive messages from the client
+    newConnection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SyncClientXPCToServer)];
+    newConnection.exportedObject = self;
+    
+    [newConnection resume];
+    return YES;
+}
+
+#pragma mark - SyncClientXPCToServer
+
+- (void)registerClientWithEndpoint:(NSXPCListenerEndpoint *)endpoint
+{
+    // A client is registering with us, create a socket for it
     SocketApiServer *server = self.wrapper->q_ptr;
-    SocketApiSocketPrivate *socketPrivate = new SocketApiSocketPrivate(remoteEnd);
+    SocketApiSocketPrivate *socketPrivate = new SocketApiSocketPrivate(endpoint);
     SocketApiSocket *socket = new SocketApiSocket(server, socketPrivate);
     self.wrapper->pendingConnections.append(socket);
     Q_EMIT server->newConnection();
-
-    [remoteEnd registerTransmitter:socketPrivate->localEnd];
 }
+
+- (void)sendMessage:(NSData *)msg
+{
+    // This is called by the client to send messages to us
+    // Find the right socket and deliver the message
+    // For now, broadcast to the most recent socket (in practice there's usually one client)
+    if (!self.wrapper->pendingConnections.isEmpty()) {
+        SocketApiSocket *socket = self.wrapper->pendingConnections.last();
+        SocketApiSocketPrivate *d = socket->d_ptr.data();
+        d->inBuffer += QByteArray::fromRawNSData(msg);
+        Q_EMIT socket->readyRead();
+    }
+}
+
 @end
 
 
@@ -170,20 +215,9 @@ qint64 SocketApiSocket::writeData(const char *data, qint64 len)
         return -1;
     }
 
-    @try {
-        // FIXME: The NSConnection will make this block unless the function is marked as "oneway"
-        // in the protocol. This isn't async and reduces our performances but this currectly avoids
-        // a Mach queue deadlock during requests bursts of the legacy OpenCloudFinder extension.
-        // Since FinderSync already runs in a separate process, blocking isn't too critical.
-        NSData *payload = QByteArray::fromRawData(data, static_cast<int>(len)).toRawNSData();
-        [d->remoteEnd sendMessage:payload];
-        return len;
-    } @catch (NSException *) {
-        // connectionDidDie can be notified too late, also interpret any sending exception as a disconnection.
-        d->disconnectRemote();
-        Q_EMIT disconnected();
-        return -1;
-    }
+    NSData *payload = QByteArray::fromRawData(data, static_cast<int>(len)).toRawNSData();
+    [d->clientConnection sendMessage:payload];
+    return len;
 }
 
 qint64 SocketApiSocket::bytesAvailable() const
@@ -198,25 +232,15 @@ bool SocketApiSocket::canReadLine() const
     return d->inBuffer.indexOf('\n', int(pos())) != -1 || QIODevice::canReadLine();
 }
 
-SocketApiSocketPrivate::SocketApiSocketPrivate(NSDistantObject<ChannelProtocol> *remoteEnd)
-    : remoteEnd(remoteEnd)
-    , localEnd([[LocalEnd alloc] initWithWrapper:this])
+SocketApiSocketPrivate::SocketApiSocketPrivate(NSXPCListenerEndpoint *endpoint)
+    : clientConnection([[XPCClientConnection alloc] initWithWrapper:this endpoint:endpoint])
 {
-    [remoteEnd retain];
-    // (Ab)use our objective-c object just to catch the notification
-    [[NSNotificationCenter defaultCenter] addObserver:localEnd
-                                             selector:@selector(connectionDidDie:)
-                                                 name:NSConnectionDidDieNotification
-                                               object:[remoteEnd connectionForProxy]];
 }
 
 SocketApiSocketPrivate::~SocketApiSocketPrivate()
 {
     disconnectRemote();
-
-    // The DO vended localEnd might still be referenced by the connection
-    localEnd.wrapper = nil;
-    [localEnd release];
+    clientConnection.wrapper = nil;
 }
 
 void SocketApiSocketPrivate::disconnectRemote()
@@ -224,8 +248,7 @@ void SocketApiSocketPrivate::disconnectRemote()
     if (isRemoteDisconnected)
         return;
     isRemoteDisconnected = true;
-
-    [remoteEnd release];
+    [clientConnection invalidate];
 }
 
 SocketApiServer::SocketApiServer()
@@ -241,14 +264,22 @@ SocketApiServer::~SocketApiServer()
 
 void SocketApiServer::close()
 {
-    // Assume we'll be destroyed right after
+    Q_D(SocketApiServer);
+    [d->listener invalidate];
 }
 
 bool SocketApiServer::listen(const QString &name)
 {
     Q_D(SocketApiServer);
-    // Set the name of the root object
-    return [d->connection registerName:name.toNSString()];
+    d->serviceName = name;
+    
+    // Create a named Mach service listener
+    // Note: The service name must be registered in the app's Info.plist or launchd configuration
+    d->listener = [[NSXPCListener alloc] initWithMachServiceName:name.toNSString()];
+    d->listener.delegate = d->server;
+    [d->listener resume];
+    
+    return YES;
 }
 
 SocketApiSocket *SocketApiServer::nextPendingConnection()
@@ -258,16 +289,13 @@ SocketApiSocket *SocketApiServer::nextPendingConnection()
 }
 
 SocketApiServerPrivate::SocketApiServerPrivate()
+    : listener(nil)
+    , server([[XPCServer alloc] initWithWrapper:this])
 {
-    // Create the connection and server object to vend over Disributed Objects
-    connection = [[NSConnection alloc] init];
-    server = [[Server alloc] initWithWrapper:this];
-    [connection setRootObject:server];
 }
 
 SocketApiServerPrivate::~SocketApiServerPrivate()
 {
-    [connection release];
+    [listener invalidate];
     server.wrapper = nil;
-    [server release];
 }

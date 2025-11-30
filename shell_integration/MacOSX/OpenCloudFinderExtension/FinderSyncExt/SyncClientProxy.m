@@ -14,12 +14,14 @@
 
 #import "SyncClientProxy.h"
 
-@protocol ServerProtocol <NSObject>
-- (void)registerClient:(id)client;
-@end
+@interface SyncClientProxy () <NSXPCListenerDelegate>
 
-@interface SyncClientProxy ()
-- (void)registerTransmitter:(id)tx;
+@property (nonatomic, strong) NSString *serverName;
+@property (nonatomic, strong) NSXPCConnection *serverConnection;
+@property (nonatomic, strong) NSXPCListener *clientListener;
+@property (nonatomic, strong) NSXPCConnection *reverseConnection;
+@property (nonatomic, assign) BOOL isConnected;
+
 @end
 
 @implementation SyncClientProxy
@@ -27,124 +29,200 @@
 - (instancetype)initWithDelegate:(id)arg1 serverName:(NSString *)serverName
 {
     self = [super init];
-
-    self.delegate = arg1;
-    _serverName = serverName;
-    _remoteEnd = nil;
-
+    if (self) {
+        self.delegate = arg1;
+        self.serverName = serverName;
+        self.isConnected = NO;
+    }
     return self;
+}
+
+- (void)dealloc
+{
+    [self.serverConnection invalidate];
+    [self.reverseConnection invalidate];
+    [self.clientListener invalidate];
 }
 
 #pragma mark - Connection setup
 
 - (void)start
 {
-    if (_remoteEnd)
-        return;
-
-    // Lookup the server connection
-    NSConnection *conn = [NSConnection connectionWithRegisteredName:_serverName host:nil];
-
-    if (!conn) {
-        // Could not connect to the sync client
-        [self scheduleRetry];
+    if (self.isConnected) {
         return;
     }
 
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(connectionDidDie:) name:NSConnectionDidDieNotification object:conn];
+    // Create an anonymous listener for the server to call back into us
+    self.clientListener = [NSXPCListener anonymousListener];
+    self.clientListener.delegate = self;
+    [self.clientListener resume];
 
-    NSDistantObject<ServerProtocol> *server = (NSDistantObject<ServerProtocol> *)[conn rootProxy];
-    assert(server);
-
-    // This saves a few Mach messages, enable "Distributed Objects" in the scheme's Run diagnostics to watch
-    [server setProtocolForProxy:@protocol(ServerProtocol)];
-
-    // Send an object to the server to act as the channel rx, we'll receive the tx through registerTransmitter
-    [server registerClient:self];
+    // Connect to the main app's XPC service
+    self.serverConnection = [[NSXPCConnection alloc] initWithMachServiceName:self.serverName
+                                                                     options:0];
+    
+    // Set up the interface for messages we send TO the server
+    self.serverConnection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SyncClientXPCToServer)];
+    
+    // Set up error handling
+    __weak typeof(self) weakSelf = self;
+    self.serverConnection.interruptionHandler = ^{
+        NSLog(@"SyncClientProxy: XPC connection interrupted");
+        [weakSelf handleConnectionDeath];
+    };
+    self.serverConnection.invalidationHandler = ^{
+        NSLog(@"SyncClientProxy: XPC connection invalidated");
+        [weakSelf handleConnectionDeath];
+    };
+    
+    [self.serverConnection resume];
+    
+    // Register with the server, passing our listener endpoint so it can call us back
+    id<SyncClientXPCToServer> server = [self.serverConnection remoteObjectProxyWithErrorHandler:^(NSError *error) {
+        NSLog(@"SyncClientProxy: Remote object error: %@", error);
+        [weakSelf handleConnectionDeath];
+    }];
+    
+    [server registerClientWithEndpoint:self.clientListener.endpoint];
 }
 
-- (void)registerTransmitter:(id)tx;
-{
-    // The server replied with the distant object that we will use for tx
-    _remoteEnd = (NSDistantObject<ChannelProtocol> *)tx;
-    [_remoteEnd setProtocolForProxy:@protocol(ChannelProtocol)];
+#pragma mark - NSXPCListenerDelegate
 
+- (BOOL)listener:(NSXPCListener *)listener shouldAcceptNewConnection:(NSXPCConnection *)newConnection
+{
+    // This is called when the server connects back to us
+    newConnection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SyncClientXPCFromServer)];
+    newConnection.exportedObject = self;
+    
+    __weak typeof(self) weakSelf = self;
+    newConnection.interruptionHandler = ^{
+        NSLog(@"SyncClientProxy: Reverse connection interrupted");
+        [weakSelf handleConnectionDeath];
+    };
+    newConnection.invalidationHandler = ^{
+        NSLog(@"SyncClientProxy: Reverse connection invalidated");
+        [weakSelf handleConnectionDeath];
+    };
+    
+    self.reverseConnection = newConnection;
+    [newConnection resume];
+    
+    self.isConnected = YES;
+    
     // Everything is set up, start querying
     [self askOnSocket:@"" query:@"GET_STRINGS"];
+    
+    return YES;
+}
+
+#pragma mark - Connection lifecycle
+
+- (void)handleConnectionDeath
+{
+    self.isConnected = NO;
+    self.serverConnection = nil;
+    self.reverseConnection = nil;
+    self.clientListener = nil;
+    
+    [self.delegate connectionDidDie];
+    [self scheduleRetry];
 }
 
 - (void)scheduleRetry
 {
-    [NSTimer scheduledTimerWithTimeInterval:5 target:self selector:@selector(start) userInfo:nil repeats:NO];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self start];
+    });
 }
 
-- (void)connectionDidDie:(NSNotification *)notification
-{
-#pragma unused(notification)
-    _remoteEnd = nil;
-    [_delegate connectionDidDie];
-
-    [self scheduleRetry];
-}
-
-#pragma mark - Communication logic
+#pragma mark - SyncClientXPCFromServer (messages FROM server)
 
 - (void)sendMessage:(NSData *)msg
 {
     NSString *answer = [[NSString alloc] initWithData:msg encoding:NSUTF8StringEncoding];
+    if (!answer || answer.length == 0) {
+        return;
+    }
 
     // Cut the trailing newline. We always only receive one line from the client.
-    answer = [answer substringToIndex:[answer length] - 1];
+    if ([answer hasSuffix:@"\n"]) {
+        answer = [answer substringToIndex:[answer length] - 1];
+    }
     NSArray *chunks = [answer componentsSeparatedByString:@":"];
+    if (chunks.count == 0) {
+        return;
+    }
 
-    if ([[chunks objectAtIndex:0] isEqualToString:@"STATUS"]) {
-        NSString *result = [chunks objectAtIndex:1];
-        NSString *path = [chunks objectAtIndex:2];
-        if ([chunks count] > 3) {
-            for (int i = 2; i < [chunks count] - 1; i++) {
-                path = [NSString stringWithFormat:@"%@:%@", path, [chunks objectAtIndex:i + 1]];
+    NSString *command = [chunks objectAtIndex:0];
+    
+    if ([command isEqualToString:@"STATUS"]) {
+        if (chunks.count >= 3) {
+            NSString *result = [chunks objectAtIndex:1];
+            NSString *path = [chunks objectAtIndex:2];
+            if ([chunks count] > 3) {
+                for (NSUInteger i = 2; i < [chunks count] - 1; i++) {
+                    path = [NSString stringWithFormat:@"%@:%@", path, [chunks objectAtIndex:i + 1]];
+                }
             }
+            [self.delegate setResultForPath:path result:result];
         }
-        [_delegate setResultForPath:path result:result];
-    } else if ([[chunks objectAtIndex:0] isEqualToString:@"UPDATE_VIEW"]) {
-        NSString *path = [chunks objectAtIndex:1];
-        [_delegate reFetchFileNameCacheForPath:path];
-    } else if ([[chunks objectAtIndex:0] isEqualToString:@"REGISTER_PATH"]) {
-        NSString *path = [chunks objectAtIndex:1];
-        [_delegate registerPath:path];
-    } else if ([[chunks objectAtIndex:0] isEqualToString:@"UNREGISTER_PATH"]) {
-        NSString *path = [chunks objectAtIndex:1];
-        [_delegate unregisterPath:path];
-    } else if ([[chunks objectAtIndex:0] isEqualToString:@"GET_STRINGS"]) {
+    } else if ([command isEqualToString:@"UPDATE_VIEW"]) {
+        if (chunks.count >= 2) {
+            NSString *path = [chunks objectAtIndex:1];
+            [self.delegate reFetchFileNameCacheForPath:path];
+        }
+    } else if ([command isEqualToString:@"REGISTER_PATH"]) {
+        if (chunks.count >= 2) {
+            NSString *path = [chunks objectAtIndex:1];
+            [self.delegate registerPath:path];
+        }
+    } else if ([command isEqualToString:@"UNREGISTER_PATH"]) {
+        if (chunks.count >= 2) {
+            NSString *path = [chunks objectAtIndex:1];
+            [self.delegate unregisterPath:path];
+        }
+    } else if ([command isEqualToString:@"GET_STRINGS"]) {
         // BEGIN and END messages, do nothing.
-    } else if ([[chunks objectAtIndex:0] isEqualToString:@"STRING"]) {
-        [_delegate setString:[chunks objectAtIndex:1] value:[chunks objectAtIndex:2]];
-    } else if ([[chunks objectAtIndex:0] isEqualToString:@"GET_MENU_ITEMS"]) {
-        if ([[chunks objectAtIndex:1] isEqualToString:@"BEGIN"]) {
-            [_delegate resetMenuItems];
-        } else if ([[chunks objectAtIndex:1] isEqualToString:@"END"]) {
-            // Don't do anything special, the askOnSocket call in FinderSync menuForMenuKind will return after this line
+    } else if ([command isEqualToString:@"STRING"]) {
+        if (chunks.count >= 3) {
+            [self.delegate setString:[chunks objectAtIndex:1] value:[chunks objectAtIndex:2]];
         }
-    } else if ([[chunks objectAtIndex:0] isEqualToString:@"MENU_ITEM"]) {
-        NSMutableDictionary *item = [[NSMutableDictionary alloc] init];
-        [item setValue:[chunks objectAtIndex:1] forKey:@"command"]; // e.g. "COPY_PRIVATE_LINK"
-        [item setValue:[chunks objectAtIndex:2] forKey:@"flags"]; // e.g. "d"
-        [item setValue:[chunks objectAtIndex:3] forKey:@"text"]; // e.g. "Copy private link to clipboard"
-        [_delegate addMenuItem:item];
+    } else if ([command isEqualToString:@"GET_MENU_ITEMS"]) {
+        if (chunks.count >= 2) {
+            if ([[chunks objectAtIndex:1] isEqualToString:@"BEGIN"]) {
+                [self.delegate resetMenuItems];
+            }
+            // END: Don't do anything special
+        }
+    } else if ([command isEqualToString:@"MENU_ITEM"]) {
+        if (chunks.count >= 4) {
+            NSMutableDictionary *item = [[NSMutableDictionary alloc] init];
+            [item setValue:[chunks objectAtIndex:1] forKey:@"command"]; // e.g. "COPY_PRIVATE_LINK"
+            [item setValue:[chunks objectAtIndex:2] forKey:@"flags"]; // e.g. "d"
+            [item setValue:[chunks objectAtIndex:3] forKey:@"text"]; // e.g. "Copy private link to clipboard"
+            [self.delegate addMenuItem:item];
+        }
     } else {
-        NSLog(@"SyncState: Unknown command %@", [chunks objectAtIndex:0]);
+        NSLog(@"SyncState: Unknown command %@", command);
     }
 }
 
+#pragma mark - Sending messages TO server
+
 - (void)askOnSocket:(NSString *)path query:(NSString *)verb
 {
-    NSString *query = [NSString stringWithFormat:@"%@:%@\n", verb, path];
-
-    @try {
-        [_remoteEnd sendMessage:[query dataUsingEncoding:NSUTF8StringEncoding]];
-    } @catch (NSException *e) {
-        // Do nothing and wait for connectionDidDie
+    if (!self.isConnected) {
+        return;
     }
+    
+    NSString *query = [NSString stringWithFormat:@"%@:%@\n", verb, path];
+    NSData *data = [query dataUsingEncoding:NSUTF8StringEncoding];
+    
+    id<SyncClientXPCToServer> server = [self.serverConnection remoteObjectProxyWithErrorHandler:^(NSError *error) {
+        NSLog(@"SyncClientProxy: Error sending message: %@", error);
+    }];
+    
+    [server sendMessage:data];
 }
 
 - (void)askForIcon:(NSString *)path isDirectory:(BOOL)isDir

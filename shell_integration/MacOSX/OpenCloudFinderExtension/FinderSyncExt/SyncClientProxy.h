@@ -14,7 +14,6 @@
 
 #import <Foundation/Foundation.h>
 
-
 @protocol SyncClientProxyDelegate <NSObject>
 - (void)setResultForPath:(NSString *)path result:(NSString *)result;
 - (void)reFetchFileNameCacheForPath:(NSString *)path;
@@ -26,14 +25,18 @@
 - (void)connectionDidDie;
 @end
 
-@protocol ChannelProtocol <NSObject>
+/// Protocol for the remote end (main app) to send messages back to the extension
+@protocol SyncClientXPCFromServer <NSObject>
 - (void)sendMessage:(NSData *)msg;
 @end
 
-@interface SyncClientProxy : NSObject <ChannelProtocol> {
-    NSString *_serverName;
-    NSDistantObject<ChannelProtocol> *_remoteEnd;
-}
+/// Protocol for the extension to send messages to the main app
+@protocol SyncClientXPCToServer <NSObject>
+- (void)registerClientWithEndpoint:(NSXPCListenerEndpoint *)endpoint;
+- (void)sendMessage:(NSData *)msg;
+@end
+
+@interface SyncClientProxy : NSObject <SyncClientXPCFromServer>
 
 @property (weak) id<SyncClientProxyDelegate> delegate;
 
@@ -41,4 +44,5 @@
 - (void)start;
 - (void)askOnSocket:(NSString *)path query:(NSString *)verb;
 - (void)askForIcon:(NSString *)path isDirectory:(BOOL)isDir;
+
 @end

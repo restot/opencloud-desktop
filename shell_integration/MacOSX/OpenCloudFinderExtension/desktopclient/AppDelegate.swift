@@ -4,7 +4,6 @@ import os.log
 
 let logger = Logger(subsystem: "eu.opencloud.desktopclient", category: "FileProvider")
 
-@main
 class AppDelegate: NSObject, NSApplicationDelegate {
     
     override init() {
