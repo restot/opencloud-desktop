@@ -40,10 +40,13 @@
 | 3.1 WebDAV Client | ✅ Done | WebDAVClient.swift with PROPFIND, GET, PUT, DELETE, MKCOL |
 | 3.2 Item Database | ✅ Done | SQLite-based ItemDatabase.swift + ItemMetadata.swift |
 | 3.3 WebDAV XML Parser | ✅ Done | WebDAVXMLParser.swift parses PROPFIND responses |
-| 3.4 XPC Auth Flow | ⚙️ In Progress | Main app sends OAuth token via XPC, extension receives |
-| 3.5 Real File Enumeration | ⬜ Not Started | Wire WebDAV to enumerator |
-| 3.6 On-Demand Download | ⬜ Not Started | fetchContents with WebDAV GET |
-| 3.7 Upload Handling | ⬜ Not Started | createItem, modifyItem with WebDAV PUT |
+| 3.4 XPC Auth Flow | ✅ Done | Main app sends OAuth token (1283 chars), extension XPC connected |
+| 3.5 Bundle ID Fix | ✅ Done | Standardized to eu.opencloud.desktop everywhere |
+| 3.6 NSFileProviderServicing | ✅ Done | Added protocol for XPC service discovery |
+| 3.7 Sandbox Entitlement | ✅ Done | Required for extension to launch |
+| 3.8 Real File Enumeration | ⚙️ In Progress | Wire WebDAV to enumerator (credentials received) |
+| 3.9 On-Demand Download | ⬜ Not Started | fetchContents with WebDAV GET |
+| 3.10 Upload Handling | ⬜ Not Started | createItem, modifyItem with WebDAV PUT |
 
 ### Phase 4: Full VFS Features
 **Goal**: Complete iCloud-like experience
@@ -59,8 +62,11 @@
 ### FileProviderExt
 - Built and bundled via CMake alongside FinderSyncExt
 - Domain auto-registers on startup (`FileProviderDomainManager`) and appears at `~/Library/CloudStorage/desktopclient-OpenCloud/`
-- Enumeration returns demo items (README.md, Welcome.txt, Documents/, Photos/)
-- `fetchContents` hydrates a temp file for demo
+- XPC service discovery working via NSFileProviderServicing protocol
+- Main app sends OAuth access token (1283 chars) to extension via XPC
+- Extension is sandboxed with correct App Group (S6P3V9X548.eu.opencloud.desktop)
+- Enumeration returns demo items (needs WebDAV wiring)
+- `fetchContents` ready for WebDAV integration
 - macOS 26 compatibility: required `NSFileProviderReplicatedExtension` methods implemented; `NSExtensionFileProviderSupportsEnumeration` set
 
 ### FinderSyncExt
