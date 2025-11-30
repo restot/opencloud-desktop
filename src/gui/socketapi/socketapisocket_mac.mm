@@ -283,9 +283,14 @@ bool SocketApiServer::listen(const QString &name)
     // The file is placed in a location accessible to both the app and extensions
     NSXPCListenerEndpoint *endpoint = d->listener.endpoint;
     if (endpoint) {
+        NSError *archiveError = nil;
+        // NSXPCListenerEndpoint doesn't support secure coding, use legacy archiver
         NSData *endpointData = [NSKeyedArchiver archivedDataWithRootObject:endpoint
-                                                     requiringSecureCoding:YES
-                                                                     error:nil];
+                                                     requiringSecureCoding:NO
+                                                                     error:&archiveError];
+        if (archiveError) {
+            NSLog(@"SocketApiServer: Failed to archive endpoint: %@", archiveError);
+        }
         if (endpointData) {
             // Write to user's Application Support directory
             NSArray *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES);

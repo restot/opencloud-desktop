@@ -113,12 +113,21 @@
     }
     
     NSError *error = nil;
+    // NSXPCListenerEndpoint doesn't support secure coding, use legacy unarchiver
     NSXPCListenerEndpoint *endpoint = [NSKeyedUnarchiver unarchivedObjectOfClass:[NSXPCListenerEndpoint class]
                                                                         fromData:endpointData
                                                                            error:&error];
-    if (error) {
-        NSLog(@"SyncClientProxy: Failed to unarchive endpoint: %@", error);
-        return nil;
+    if (error || !endpoint) {
+        // Try legacy unarchiver as fallback
+        @try {
+            #pragma clang diagnostic push
+            #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            endpoint = [NSKeyedUnarchiver unarchiveObjectWithData:endpointData];
+            #pragma clang diagnostic pop
+        } @catch (NSException *exception) {
+            NSLog(@"SyncClientProxy: Failed to unarchive endpoint: %@", exception);
+            return nil;
+        }
     }
     
     NSLog(@"SyncClientProxy: Successfully read endpoint from %@", endpointFile);
