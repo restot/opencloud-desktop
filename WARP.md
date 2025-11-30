@@ -10,7 +10,7 @@ OpenCloud Desktop is a Qt-based C++ desktop synchronization client for OpenCloud
 - **Language**: C++20
 - **Build System**: CMake 3.18+ with KDE ECM (Extra CMake Modules)
 - **Database**: SQLite3
-- **Version**: 3.1.1 (see VERSION.cmake)
+- **Version**: 3.1.4 (see VERSION.cmake)
 
 ## Build System & Development Commands
 
@@ -82,6 +82,37 @@ pwsh .github/workflows/.craft.ps1 -c --no-cache --test opencloud/opencloud-deskt
 ```bash
 export CRAFT_TARGET=macos-clang-arm64
 pwsh .github/workflows/.craft.ps1 -c --no-cache opencloud/opencloud-desktop
+```
+
+#### Max Performance Build (Recommended)
+
+For fastest builds, set parallel compilation flags before running Craft:
+
+```bash
+export CRAFT_TARGET=macos-clang-arm64
+export MAKEFLAGS="-j$(sysctl -n hw.ncpu)"
+export CMAKE_BUILD_PARALLEL_LEVEL=$(sysctl -n hw.ncpu)
+
+# Full rebuild with max parallelism
+pwsh .github/workflows/.craft.ps1 -c --no-cache opencloud/opencloud-desktop
+
+# Or compile only (faster for incremental builds)
+pwsh .github/workflows/.craft.ps1 -c --compile opencloud/opencloud-desktop
+
+# Then install
+pwsh .github/workflows/.craft.ps1 -c --install opencloud/opencloud-desktop
+```
+
+**Flags explained:**
+- `MAKEFLAGS="-j$(sysctl -n hw.ncpu)"` - Parallel make jobs (uses all CPU cores)
+- `CMAKE_BUILD_PARALLEL_LEVEL` - Ninja/CMake parallel build level
+- `--compile` - Only compile, skip configure if already done (faster for code changes)
+- `--install` - Install to final location after compile
+
+**Filtering build output:**
+```bash
+# Show only errors and build status (useful for long builds)
+pwsh .github/workflows/.craft.ps1 -c opencloud/opencloud-desktop 2>&1 | grep -E "(error:|BUILD)" | tail -5
 ```
 
 ### Alternative: Plain CMake (Advanced)

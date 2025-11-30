@@ -18,8 +18,10 @@
 #include "common/restartmanager.h"
 #include "gui/application.h"
 #include "gui/folderman.h"
+#include "gui/guiutility.h"
 #include "gui/logbrowser.h"
 #include "gui/networkinformation.h"
+#include "gui/settingsdialog.h"
 #include "libsync/configfile.h"
 #include "libsync/platform.h"
 #include "libsync/theme.h"
@@ -525,6 +527,34 @@ int main(int argc, char **argv)
 
         // Now that everything is up and running, start accepting connections/requests from the shell integration.
         folderManager->socketApi()->startShellIntegration();
+
+#ifdef Q_OS_MAC
+        // Check if Finder extension is enabled on first launch or after upgrade
+        // Show a prompt to the user if it's not enabled
+        QTimer::singleShot(2000, ocApp.get(), []() {
+            auto settings = ConfigFile::makeQSettings();
+            const QString lastPromptVersion = settings.value(QStringLiteral("finderExtensionPromptVersion")).toString();
+            const QString currentVersion = Version::versionWithBuildNumber().toString();
+
+            if (!Utility::isFinderSyncExtensionEnabled() && lastPromptVersion != currentVersion) {
+                // Remember that we prompted for this version
+                settings.setValue(QStringLiteral("finderExtensionPromptVersion"), currentVersion);
+
+                auto result = QMessageBox::question(
+                    OCC::ocApp()->settingsDialog(),
+                    QCoreApplication::translate("main", "Finder Integration"),
+                    QCoreApplication::translate("main",
+                        "The Finder integration (overlay icons and context menus) is not enabled.\n\n"
+                        "Would you like to open System Settings to enable it?"),
+                    QMessageBox::Yes | QMessageBox::No,
+                    QMessageBox::Yes);
+
+                if (result == QMessageBox::Yes) {
+                    Utility::showFinderSyncExtensionManagementInterface();
+                }
+            }
+        });
+#endif
 
         return app.exec();
     }).exec(argc, argv);

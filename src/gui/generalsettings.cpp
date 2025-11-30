@@ -18,6 +18,7 @@
 #include "common/restartmanager.h"
 #include "gui/application.h"
 #include "gui/folderman.h"
+#include "gui/guiutility.h"
 #include "gui/ignorelisteditor.h"
 #include "gui/logbrowser.h"
 #include "gui/settingsdialog.h"
@@ -78,6 +79,17 @@ GeneralSettings::GeneralSettings(QWidget *parent)
     });
 
     connect(_ui->about_pushButton, &QPushButton::clicked, ocApp(), &Application::showAbout);
+
+#ifdef Q_OS_MAC
+    // macOS Finder extension management button
+    connect(_ui->finderExtensionButton, &QPushButton::clicked, this, []() {
+        Utility::showFinderSyncExtensionManagementInterface();
+    });
+    updateFinderExtensionButton();
+#else
+    // Hide the Finder extension button on non-macOS platforms
+    _ui->finderExtensionButton->setVisible(false);
+#endif
 }
 
 GeneralSettings::~GeneralSettings()
@@ -152,6 +164,21 @@ void GeneralSettings::reloadConfig()
         }
     }
 }
+
+#ifdef Q_OS_MAC
+void GeneralSettings::updateFinderExtensionButton()
+{
+    bool enabled = Utility::isFinderSyncExtensionEnabled();
+    if (enabled) {
+        _ui->finderExtensionButton->setText(tr("Finder Integration (Enabled)"));
+        _ui->finderExtensionButton->setStyleSheet(QString());
+    } else {
+        _ui->finderExtensionButton->setText(tr("Finder Integration (Disabled)"));
+        // Highlight the button to draw attention
+        _ui->finderExtensionButton->setStyleSheet(QStringLiteral("QPushButton { color: #c0392b; font-weight: bold; }"));
+    }
+}
+#endif
 
 void GeneralSettings::loadLanguageNamesIntoDropdown()
 {
