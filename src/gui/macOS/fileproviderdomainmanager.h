@@ -19,6 +19,7 @@
 #include <memory>
 
 #include "gui/accountstate.h"
+#include "opencloudguilib.h"
 
 namespace OCC {
 
@@ -35,7 +36,7 @@ namespace Mac {
  * 
  * Each account gets its own FileProvider domain with a UUID-based identifier.
  */
-class FileProviderDomainManager : public QObject
+class OPENCLOUD_GUI_EXPORT FileProviderDomainManager : public QObject
 {
     Q_OBJECT
 
@@ -47,6 +48,12 @@ public:
      * @brief Start the domain manager and set up existing domains.
      */
     void start();
+
+    /**
+     * @brief Remove all FileProvider domains (for cleanup).
+     * @param waitForCompletion If true, block until all domains are removed.
+     */
+    void removeAllDomains(bool waitForCompletion = false);
 
     /**
      * @brief Get the account state for a given domain identifier.

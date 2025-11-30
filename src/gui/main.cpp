@@ -38,6 +38,10 @@
 #include "updater/updater.h"
 #endif
 
+#ifdef Q_OS_MACOS
+#include "macOS/fileproviderdomainmanager.h"
+#endif
+
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QLibraryInfo>
@@ -88,6 +92,10 @@ struct CommandLineOptions
     bool logDebug = false;
 
     bool debugMode = false;
+
+#ifdef Q_OS_MACOS
+    bool clearFileProviderDomains = false;
+#endif
 };
 
 CommandLineOptions parseOptions(const QStringList &arguments)
@@ -136,6 +144,11 @@ CommandLineOptions parseOptions(const QStringList &arguments)
     auto debugOption = addOption({QStringLiteral("debug"), QApplication::translate("CommandLine", "Enable debug mode.")});
     addOption({QStringLiteral("cmd"), QApplication::translate("CommandLine", "Forward all arguments to the cmd client. This argument must be the first.")});
 
+#ifdef Q_OS_MACOS
+    auto clearFileProviderDomainsOption = addOption({QStringLiteral("clear-fileprovider-domains"),
+        QApplication::translate("CommandLine", "Remove all FileProvider domains (Finder sidebar locations) and exit. Use to clean up orphaned domains.")});
+#endif
+
     parser.process(arguments);
 
     CommandLineOptions out;
@@ -165,6 +178,12 @@ CommandLineOptions parseOptions(const QStringList &arguments)
         out.logDebug = true;
         out.debugMode = true;
     }
+
+#ifdef Q_OS_MACOS
+    if (parser.isSet(clearFileProviderDomainsOption)) {
+        out.clearFileProviderDomains = true;
+    }
+#endif
 
     return out;
 }
@@ -458,6 +477,17 @@ int main(int argc, char **argv)
         }
 
         setupLogging(options);
+
+#ifdef Q_OS_MACOS
+        // Handle --clear-fileprovider-domains before any other initialization
+        if (options.clearFileProviderDomains) {
+            qCInfo(lcMain) << "Clearing all FileProvider domains...";
+            OCC::Mac::FileProviderDomainManager domainManager;
+            domainManager.removeAllDomains(true); // Wait for completion
+            qCInfo(lcMain) << "FileProvider domains cleared.";
+            return 0;
+        }
+#endif
         NetworkInformation::instance(); //
 
         platform->setApplication(&app);

@@ -269,6 +269,75 @@ public:
         return _registeredDomains.keys();
     }
 
+    void removeAllDomains(bool waitForCompletion)
+    {
+        NSLog(@"[FPDomainManager] removeAllDomains called, waitForCompletion=%d", waitForCompletion);
+        dispatch_group_t group = dispatch_group_create();
+        dispatch_group_enter(group);
+
+        [NSFileProviderManager getDomainsWithCompletionHandler:^(NSArray<NSFileProviderDomain *> *domains, NSError *error) {
+            if (error) {
+                NSLog(@"[FPDomainManager] getDomainsWithCompletionHandler error: %@", error);
+                qCWarning(lcFileProviderDomainManager) << "Could not get existing file provider domains:"
+                                                       << QString::fromNSString(error.localizedDescription);
+                dispatch_group_leave(group);
+                return;
+            }
+
+            qCInfo(lcFileProviderDomainManager) << "Removing" << domains.count << "file provider domains";
+            NSLog(@"[FPDomainManager] Found %lu domains to potentially remove", (unsigned long)domains.count);
+
+            dispatch_group_t removeGroup = dispatch_group_create();
+
+            for (NSFileProviderDomain *domain in domains) {
+                QString domainId = QString::fromNSString(domain.identifier);
+                QString displayName = QString::fromNSString(domain.displayName);
+                
+                // Only remove our domains (skip iCloud etc.)
+                // Our domains use UUIDs as identifiers
+                QUuid uuid = QUuid::fromString(domainId);
+                if (uuid.isNull()) {
+                    NSLog(@"[FPDomainManager] Skipping non-UUID domain: %@", domain.identifier);
+                    continue;
+                }
+
+                dispatch_group_enter(removeGroup);
+                qCInfo(lcFileProviderDomainManager) << "Removing domain:" << domainId << "(" << displayName << ")";
+                NSLog(@"[FPDomainManager] Removing domain: %@ (%@)", domain.identifier, domain.displayName);
+
+                [NSFileProviderManager removeDomain:domain completionHandler:^(NSError *removeError) {
+                    if (removeError) {
+                        qCWarning(lcFileProviderDomainManager) << "Error removing domain:" << domainId
+                                                               << QString::fromNSString(removeError.localizedDescription);
+                        NSLog(@"[FPDomainManager] Error removing domain %@: %@", domain.identifier, removeError);
+                    } else {
+                        qCInfo(lcFileProviderDomainManager) << "Successfully removed domain:" << domainId;
+                        NSLog(@"[FPDomainManager] Successfully removed domain: %@", domain.identifier);
+                    }
+                    dispatch_group_leave(removeGroup);
+                }];
+            }
+
+            dispatch_group_wait(removeGroup, DISPATCH_TIME_FOREVER);
+            
+            // Clear our internal state
+            for (auto *domain : _registeredDomains.values()) {
+                if (domain) {
+                    [domain release];
+                }
+            }
+            _registeredDomains.clear();
+
+            dispatch_group_leave(group);
+        }];
+
+        if (waitForCompletion) {
+            dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+            qCInfo(lcFileProviderDomainManager) << "All domains removed";
+            NSLog(@"[FPDomainManager] All domains removed");
+        }
+    }
+
 private:
     // Keys are domain identifiers (account UUIDs)
     QHash<QString, NSFileProviderDomain *> _registeredDomains;
@@ -429,6 +498,14 @@ void *FileProviderDomainManager::domainForAccount(const AccountState *accountSta
         return nullptr;
     }
     return d->domainForAccount(accountState);
+}
+
+void FileProviderDomainManager::removeAllDomains(bool waitForCompletion)
+{
+    if (!d) {
+        return;
+    }
+    d->removeAllDomains(waitForCompletion);
 }
 
 } // namespace Mac
