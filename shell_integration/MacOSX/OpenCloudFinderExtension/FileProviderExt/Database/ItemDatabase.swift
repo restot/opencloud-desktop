@@ -20,7 +20,7 @@ import SQLite3
 /// Thread-safe via actor isolation.
 actor ItemDatabase {
     
-    private let logger = Logger(subsystem: "eu.opencloud.desktopclient.FileProviderExt", category: "ItemDatabase")
+    private let logger = Logger(subsystem: "eu.opencloud.desktop.FileProviderExt", category: "ItemDatabase")
     
     /// SQLite database handle
     private var db: OpaquePointer?

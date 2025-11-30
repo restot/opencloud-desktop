@@ -2,7 +2,7 @@ import Cocoa
 import FileProvider
 import os.log
 
-let logger = Logger(subsystem: "eu.opencloud.desktopclient", category: "FileProvider")
+let logger = Logger(subsystem: "eu.opencloud.desktop", category: "FileProvider")
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     

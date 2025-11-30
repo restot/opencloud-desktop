@@ -19,7 +19,7 @@ import OSLog
 class FileProviderSocketLineProcessor: NSObject, LineProcessor {
     
     weak var delegate: FileProviderExtension?
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "eu.opencloud.desktopclient.FileProviderExt", category: "SocketLineProcessor")
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "eu.opencloud.desktop.FileProviderExt", category: "SocketLineProcessor")
     
     init(delegate: FileProviderExtension) {
         self.delegate = delegate

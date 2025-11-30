@@ -21,7 +21,7 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     
     private let enumeratedItemIdentifier: NSFileProviderItemIdentifier
     private let domain: NSFileProviderDomain
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "eu.opencloud.desktopclient.FileProviderExt", category: "FileProviderEnumerator")
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "eu.opencloud.desktop.FileProviderExt", category: "FileProviderEnumerator")
     
     /// Reference to the extension for accessing WebDAV client and database
     private weak var fpExtension: FileProviderExtension?

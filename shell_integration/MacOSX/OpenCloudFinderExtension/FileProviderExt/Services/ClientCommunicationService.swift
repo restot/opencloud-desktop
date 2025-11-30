@@ -21,15 +21,16 @@ import OSLog
 class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCListenerDelegate, ClientCommunicationProtocol {
     
     let listener = NSXPCListener.anonymous()
-    let serviceName = NSFileProviderServiceName("eu.opencloud.desktopclient.ClientCommunicationService")
+    let serviceName = NSFileProviderServiceName("eu.opencloud.desktop.ClientCommunicationService")
     let fpExtension: FileProviderExtension
     let logger: Logger
     
     init(fpExtension: FileProviderExtension) {
         self.fpExtension = fpExtension
-        self.logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "eu.opencloud.desktopclient.FileProviderExt", 
+        self.logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "eu.opencloud.desktop.FileProviderExt", 
                             category: "ClientCommunicationService")
         super.init()
+        NSLog("[FileProviderExt] ClientCommunicationService init for domain: %@", fpExtension.domain.identifier.rawValue)
         logger.debug("Instantiating client communication service for domain: \(fpExtension.domain.identifier.rawValue)")
     }
     
@@ -38,6 +39,7 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
     func makeListenerEndpoint() throws -> NSXPCListenerEndpoint {
         listener.delegate = self
         listener.resume()
+        NSLog("[FileProviderExt] makeListenerEndpoint() called - XPC listener ready")
         logger.debug("Created XPC listener endpoint")
         return listener.endpoint
     }
@@ -45,6 +47,7 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
     // MARK: - NSXPCListenerDelegate
     
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection) -> Bool {
+        NSLog("[FileProviderExt] shouldAcceptNewConnection - accepting XPC from main app")
         logger.debug("Accepting new XPC connection")
         newConnection.exportedInterface = NSXPCInterface(with: ClientCommunicationProtocol.self)
         newConnection.exportedObject = self
@@ -56,11 +59,14 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
     
     func getFileProviderDomainIdentifier(completionHandler: @escaping (String?, Error?) -> Void) {
         let identifier = fpExtension.domain.identifier.rawValue
+        NSLog("[FileProviderExt] getFileProviderDomainIdentifier() -> %@", identifier)
         logger.debug("Returning file provider domain identifier: \(identifier)")
         completionHandler(identifier, nil)
     }
     
     func configureAccount(withUser user: String, userId: String, serverUrl: String, password: String) {
+        let passwordPreview = password.isEmpty ? "(empty)" : "(\(password.count) chars)"
+        NSLog("[FileProviderExt] configureAccount: user=%@, serverUrl=%@, password=%@", user, serverUrl, passwordPreview)
         logger.info("Received account configuration over XPC for user: \(user) at server: \(serverUrl)")
         fpExtension.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password)
     }

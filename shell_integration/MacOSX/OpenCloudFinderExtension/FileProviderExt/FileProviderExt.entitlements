@@ -6,7 +6,7 @@
     <true/>
     <key>com.apple.security.application-groups</key>
     <array>
-        <string>$(TeamIdentifierPrefix)eu.opencloud.desktopclient</string>
+        <string>$(TeamIdentifierPrefix)eu.opencloud.desktop</string>
     </array>
     <key>com.apple.security.network.client</key>
     <true/>

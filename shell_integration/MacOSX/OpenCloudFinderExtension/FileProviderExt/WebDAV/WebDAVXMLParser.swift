@@ -19,7 +19,7 @@ import OSLog
 /// Supports the ownCloud/Nextcloud/OpenCloud extended properties.
 final class WebDAVXMLParser: NSObject, XMLParserDelegate {
     
-    private let logger = Logger(subsystem: "eu.opencloud.desktopclient.FileProviderExt", category: "WebDAVXMLParser")
+    private let logger = Logger(subsystem: "eu.opencloud.desktop.FileProviderExt", category: "WebDAVXMLParser")
     
     /// Base URL used to resolve relative hrefs
     private let baseURL: URL

@@ -54,7 +54,7 @@ enum WebDAVError: Error, LocalizedError {
 /// WebDAV client for communicating with OpenCloud server
 actor WebDAVClient {
     
-    private let logger = Logger(subsystem: "eu.opencloud.desktopclient.FileProviderExt", category: "WebDAVClient")
+    private let logger = Logger(subsystem: "eu.opencloud.desktop.FileProviderExt", category: "WebDAVClient")
     
     /// Server base URL (e.g., "https://cloud.example.com")
     private let serverURL: URL
@@ -67,6 +67,9 @@ actor WebDAVClient {
     
     /// Password/token for authentication
     private let password: String
+    
+    /// Whether to use Bearer token auth instead of Basic
+    private let useBearer: Bool
     
     /// URL session for network requests
     private let session: URLSession
@@ -94,11 +97,14 @@ actor WebDAVClient {
         </d:propfind>
         """.data(using: .utf8)!
     
-    init(serverURL: URL, davPath: String = "/remote.php/webdav", username: String, password: String) {
+    init(serverURL: URL, davPath: String = "/remote.php/webdav", username: String, password: String, useBearer: Bool = false) {
         self.serverURL = serverURL
         self.davPath = davPath
         self.username = username
         self.password = password
+        self.useBearer = useBearer
+        
+        NSLog("[WebDAVClient] init: server=%@, davPath=%@, user=%@, useBearer=%d", serverURL.absoluteString, davPath, username, useBearer)
         
         // Configure URL session
         let config = URLSessionConfiguration.default
@@ -130,11 +136,16 @@ actor WebDAVClient {
         var request = URLRequest(url: url)
         request.httpMethod = method
         
-        // Basic auth
-        let credentials = "\(username):\(password)"
-        if let credentialsData = credentials.data(using: .utf8) {
-            let base64 = credentialsData.base64EncodedString()
-            request.setValue("Basic \(base64)", forHTTPHeaderField: "Authorization")
+        if useBearer {
+            // OAuth Bearer token
+            request.setValue("Bearer \(password)", forHTTPHeaderField: "Authorization")
+        } else {
+            // Basic auth
+            let credentials = "\(username):\(password)"
+            if let credentialsData = credentials.data(using: .utf8) {
+                let base64 = credentialsData.base64EncodedString()
+                request.setValue("Basic \(base64)", forHTTPHeaderField: "Authorization")
+            }
         }
         
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")

@@ -18,10 +18,11 @@ import UniformTypeIdentifiers
 
 /// Main FileProvider extension class implementing NSFileProviderReplicatedExtension.
 /// This extension provides on-demand file sync capabilities for OpenCloud on macOS.
-@objc class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
+/// Also implements NSFileProviderServicing to expose XPC services.
+@objc class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, NSFileProviderServicing {
     
     let domain: NSFileProviderDomain
-    let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "eu.opencloud.desktopclient.FileProviderExt", category: "FileProviderExtension")
+    let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "eu.opencloud.desktop.FileProviderExt", category: "FileProviderExtension")
     
     // Account information received from main app
     var serverUrl: String?
@@ -38,12 +39,25 @@ import UniformTypeIdentifiers
     
     // XPC service for main app communication
     lazy var clientCommunicationService: ClientCommunicationService = {
+        NSLog("[FileProviderExt] Creating ClientCommunicationService lazily")
         return ClientCommunicationService(fpExtension: self)
     }()
     
-    // Expose services to the system
-    var supportedServiceSources: [NSFileProviderServiceSource] {
-        return [clientCommunicationService]
+    // MARK: - NSFileProviderServicing
+    
+    /// Return service sources for XPC communication with host app.
+    /// This is the protocol method that macOS calls to discover available services.
+    func supportedServiceSources(for itemIdentifier: NSFileProviderItemIdentifier, completionHandler: @escaping ([any NSFileProviderServiceSource]?, Error?) -> Void) -> Progress {
+        NSLog("[FileProviderExt] supportedServiceSources(for:) called for item: %@", itemIdentifier.rawValue)
+        let progress = Progress(totalUnitCount: 1)
+        
+        // Return our client communication service for all items (including root)
+        let services: [NSFileProviderServiceSource] = [clientCommunicationService]
+        NSLog("[FileProviderExt] Returning %d service sources", services.count)
+        completionHandler(services, nil)
+        
+        progress.completedUnitCount = 1
+        return progress
     }
     
     // Socket client for communication with main app
@@ -61,7 +75,7 @@ import UniformTypeIdentifiers
     // App group identifier - must match the main app's app group
     var appGroupIdentifier: String {
         // Read from Info.plist or use default
-        return Bundle.main.object(forInfoDictionaryKey: "AppGroupIdentifier") as? String ?? "group.eu.opencloud.desktopclient"
+        return Bundle.main.object(forInfoDictionaryKey: "AppGroupIdentifier") as? String ?? "group.eu.opencloud.desktop"
     }
     
     // Container URL for extension storage
@@ -444,6 +458,7 @@ import UniformTypeIdentifiers
     
     /// Called by ClientCommunicationService when main app sends account credentials
     func setupDomainAccount(user: String, userId: String, serverUrl: String, password: String) {
+        NSLog("[FileProviderExt] setupDomainAccount: user=%@, server=%@, password=%d chars", user, serverUrl, password.count)
         logger.info("Setting up account for user: \(user) at server: \(serverUrl)")
         
         self.username = user
@@ -453,6 +468,7 @@ import UniformTypeIdentifiers
         
         // Create WebDAV client
         guard let url = URL(string: serverUrl) else {
+            NSLog("[FileProviderExt] ERROR: Invalid server URL: %@", serverUrl)
             logger.error("Invalid server URL: \(serverUrl)")
             return
         }
@@ -461,9 +477,15 @@ import UniformTypeIdentifiers
         // For now, use the standard path
         let davPath = "/remote.php/webdav"
         
-        self.webdavClient = WebDAVClient(serverURL: url, davPath: davPath, username: user, password: password)
+        // Determine auth type: OAuth tokens are typically longer than regular passwords
+        // and don't contain special characters like passwords might
+        let useBearer = password.count > 100 || password.hasPrefix("ey")  // JWT tokens start with "ey"
+        
+        NSLog("[FileProviderExt] Creating WebDAV client: url=%@, davPath=%@, useBearer=%d", url.absoluteString, davPath, useBearer)
+        self.webdavClient = WebDAVClient(serverURL: url, davPath: davPath, username: user, password: password, useBearer: useBearer)
         self.isAuthenticated = true
         
+        NSLog("[FileProviderExt] WebDAV client created, isAuthenticated=true")
         logger.info("WebDAV client created for \(url.absoluteString)")
         
         // Signal that we're ready to enumerate with real data

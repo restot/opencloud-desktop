@@ -79,7 +79,7 @@ QString Utility::socketApiSocketPath()
     //   - Empty string "" for ad-hoc/dev builds
     //   - "TEAMID." for signed builds
 
-    // Get the reverse domain from Theme (e.g., "eu.opencloud.desktopclient")
+    // Get the reverse domain from Theme (e.g., "eu.opencloud.desktop")
     QString revDomain = Theme::instance()->orgDomainName();
 
     // Build app group ID: prefix + domain

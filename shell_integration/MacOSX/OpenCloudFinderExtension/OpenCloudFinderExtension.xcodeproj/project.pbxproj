@@ -477,9 +477,9 @@
 				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
-				OC_APPLICATION_REV_DOMAIN = eu.opencloud.desktopclient;
+				OC_APPLICATION_REV_DOMAIN = eu.opencloud.desktop;
 				ONLY_ACTIVE_ARCH = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = eu.opencloud.desktopclient.FileProviderExt;
+				PRODUCT_BUNDLE_IDENTIFIER = eu.opencloud.desktop.FileProviderExt;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
@@ -561,8 +561,8 @@
 				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
-				OC_APPLICATION_REV_DOMAIN = eu.opencloud.desktopclient;
-				PRODUCT_BUNDLE_IDENTIFIER = eu.opencloud.desktopclient.FileProviderExt;
+				OC_APPLICATION_REV_DOMAIN = eu.opencloud.desktop;
+				PRODUCT_BUNDLE_IDENTIFIER = eu.opencloud.desktop.FileProviderExt;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
@@ -812,7 +812,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				OC_APPLICATION_NAME = OpenCloud;
-				OC_APPLICATION_REV_DOMAIN = eu.opencloud.desktopclient;
+				OC_APPLICATION_REV_DOMAIN = eu.opencloud.desktop;
 				OC_OEM_SHARE_ICNS = "";
 				OC_SOCKETAPI_TEAM_IDENTIFIER_PREFIX = "";
 				ONLY_ACTIVE_ARCH = YES;
@@ -873,7 +873,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				OC_APPLICATION_NAME = OpenCloud;
-				OC_APPLICATION_REV_DOMAIN = eu.opencloud.desktopclient;
+				OC_APPLICATION_REV_DOMAIN = eu.opencloud.desktop;
 				OC_OEM_SHARE_ICNS = "";
 				OC_SOCKETAPI_TEAM_IDENTIFIER_PREFIX = "";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(OC_APPLICATION_REV_DOMAIN).$(PRODUCT_NAME:rfc1034identifier)";

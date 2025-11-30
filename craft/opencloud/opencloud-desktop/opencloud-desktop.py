@@ -246,7 +246,7 @@ class Package(CMakePackageBase):
                 "name": self.subinfo.displayName,
                 "target": str(exePath),
                 "description": self.subinfo.description,
-                "appId": "eu.opencloud.desktopclient",
+                "appId": "eu.opencloud.desktop",
             }
         ]
         self.defines["icon"] = self.buildDir() / "src/gui/opencloud.ico"

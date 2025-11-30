@@ -31,7 +31,7 @@
 
 namespace {
     constexpr int64_t semaphoreWaitDelta = 3000000000; // 3 seconds
-    NSString *const clientCommunicationServiceName = @"eu.opencloud.desktopclient.ClientCommunicationService";
+    NSString *const clientCommunicationServiceName = @"eu.opencloud.desktop.ClientCommunicationService";
 }
 
 namespace OCC {
@@ -90,9 +90,11 @@ void FileProviderXPC::connectToFileProviderDomains()
                 
                 if (@available(macOS 13.0, *)) {
                     // macOS 13+ API
+                    NSLog(@"OpenCloud XPC: Calling getServiceWithName:%@ for domain:%@", clientCommunicationServiceName, domainId);
                     [manager getServiceWithName:clientCommunicationServiceName
                                  itemIdentifier:NSFileProviderRootContainerItemIdentifier
                               completionHandler:^(NSFileProviderService *service, NSError *serviceError) {
+                        NSLog(@"OpenCloud XPC: getServiceWithName callback: service=%@, error=%@", service, serviceError);
                         if (serviceError || !service) {
                             qCWarning(lcFileProviderXPC) << "Error getting service for domain:" 
                                                          << QString::fromNSString(domainId)
@@ -225,23 +227,27 @@ void FileProviderXPC::authenticateFileProviderDomains()
 
 void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdentifier)
 {
+    NSLog(@"OpenCloud XPC: authenticateFileProviderDomain() start: %s", domainIdentifier.toUtf8().constData());
     qCInfo(lcFileProviderXPC) << "Authenticating domain:" << domainIdentifier;
     
     // Find the account for this domain
     const auto accountState = FileProviderDomainManager::accountStateFromDomainIdentifier(domainIdentifier);
     if (!accountState) {
+        NSLog(@"OpenCloud XPC: No account found for domain: %s", domainIdentifier.toUtf8().constData());
         qCWarning(lcFileProviderXPC) << "No account found for domain:" << domainIdentifier;
         return;
     }
     
     const auto account = accountState->account();
     if (!account) {
+        NSLog(@"OpenCloud XPC: Account is null");
         qCWarning(lcFileProviderXPC) << "Account is null for domain:" << domainIdentifier;
         return;
     }
     
     const auto credentials = account->credentials();
     if (!credentials) {
+        NSLog(@"OpenCloud XPC: Credentials are null");
         qCWarning(lcFileProviderXPC) << "Credentials are null for domain:" << domainIdentifier;
         return;
     }
@@ -255,25 +261,30 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
     NSString *password = @"";
     if (auto *httpCreds = qobject_cast<HttpCredentials *>(credentials)) {
         QString accessToken = httpCreds->accessToken();
+        NSLog(@"OpenCloud XPC: Access token length: %d", (int)accessToken.length());
         if (!accessToken.isEmpty()) {
             password = accessToken.toNSString();
             qCDebug(lcFileProviderXPC) << "Using access token for authentication";
         } else {
+            NSLog(@"OpenCloud XPC: Access token is empty!");
             qCWarning(lcFileProviderXPC) << "Access token is empty";
         }
     } else {
+        NSLog(@"OpenCloud XPC: Credentials are not HttpCredentials");
         qCWarning(lcFileProviderXPC) << "Credentials are not HttpCredentials";
     }
     
     // Get the service proxy
     void *servicePtr = _clientCommServices.value(domainIdentifier);
     if (!servicePtr) {
+        NSLog(@"OpenCloud XPC: No service connection for domain");
         qCWarning(lcFileProviderXPC) << "No service connection for domain:" << domainIdentifier;
         return;
     }
     
     NSObject<ClientCommunicationProtocol> *service = (NSObject<ClientCommunicationProtocol> *)servicePtr;
     
+    NSLog(@"OpenCloud XPC: Calling configureAccountWithUser:%@ serverUrl:%@ password:(%lu chars)", user, serverUrl, (unsigned long)password.length);
     qCInfo(lcFileProviderXPC) << "Sending credentials to domain:" << domainIdentifier
                               << "user:" << QString::fromNSString(user)
                               << "server:" << QString::fromNSString(serverUrl);
