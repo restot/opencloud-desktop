@@ -146,11 +146,21 @@ IF( APPLE )
             settingsdialog_mac.mm
             guiutility_mac.mm
             folderwatcher_mac.cpp
-            fileproviderdomainmanager_mac.mm
-            fileproviderdomainmanager.h)
+            # FileProvider integration
+            macOS/fileproviderdomainmanager.h
+            macOS/fileproviderdomainmanager_mac.mm
+            macOS/fileprovider.h
+            macOS/fileprovider_mac.mm
+            macOS/fileproviderxpc.h
+            macOS/fileproviderxpc_mac.mm
+    )
     set_source_files_properties(guiutility_mac.mm PROPERTIES COMPILE_DEFINITIONS SOCKETAPI_TEAM_IDENTIFIER_PREFIX="${SOCKETAPI_TEAM_IDENTIFIER_PREFIX}")
     # Enable ARC for socketapisocket_mac.mm as it uses __weak references in XPC handlers
     set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/socketapi/socketapisocket_mac.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    # Add include path for ClientCommunicationProtocol.h from extension
+    target_include_directories(OpenCloudGui PRIVATE
+        ${CMAKE_SOURCE_DIR}/shell_integration/MacOSX/OpenCloudFinderExtension/FileProviderExt/Services
+    )
     find_library(FILEPROVIDER_FRAMEWORK FileProvider)
     target_link_libraries(OpenCloudGui PRIVATE ${FILEPROVIDER_FRAMEWORK})
 elseif( WIN32 )

@@ -76,7 +76,7 @@ class FileProviderSocketLineProcessor: NSObject, LineProcessor {
             let password = String(details[4])
             
             logger.info("Setting up account for user: \(user)")
-            delegate?.setupAccount(user: user, userId: userId, serverUrl: serverUrl, password: password)
+            delegate?.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password)
             
         case "IGNORE_LIST":
             // Received ignore list patterns from main app

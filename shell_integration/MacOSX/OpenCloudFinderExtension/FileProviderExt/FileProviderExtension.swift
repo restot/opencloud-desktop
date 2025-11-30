@@ -26,6 +26,18 @@ import OSLog
     var serverUrl: String?
     var username: String?
     var userId: String?
+    var password: String?
+    var isAuthenticated: Bool = false
+    
+    // XPC service for main app communication
+    lazy var clientCommunicationService: ClientCommunicationService = {
+        return ClientCommunicationService(fpExtension: self)
+    }()
+    
+    // Expose services to the system
+    var supportedServiceSources: [NSFileProviderServiceSource] {
+        return [clientCommunicationService]
+    }
     
     // Socket client for communication with main app
     lazy var socketClient: LocalSocketClient? = {
@@ -178,14 +190,31 @@ import OSLog
         socketClient?.sendMessage(message)
     }
     
-    func setupAccount(user: String, userId: String, serverUrl: String, password: String) {
+    /// Called by ClientCommunicationService when main app sends account credentials
+    func setupDomainAccount(user: String, userId: String, serverUrl: String, password: String) {
         logger.info("Setting up account for user: \(user) at server: \(serverUrl)")
         
         self.username = user
         self.userId = userId
         self.serverUrl = serverUrl
+        self.password = password
+        self.isAuthenticated = true
         
-        // Signal that we're ready to enumerate
+        // Signal that we're ready to enumerate with real data
+        signalEnumerator()
+    }
+    
+    /// Called by ClientCommunicationService when main app removes account
+    func removeAccountConfig() {
+        logger.info("Removing account configuration")
+        
+        self.username = nil
+        self.userId = nil
+        self.serverUrl = nil
+        self.password = nil
+        self.isAuthenticated = false
+        
+        // Signal enumerator to update state
         signalEnumerator()
     }
     
@@ -195,9 +224,16 @@ import OSLog
             return
         }
         
+        // Signal both root and working set
+        manager.signalEnumerator(for: .rootContainer) { error in
+            if let error = error {
+                self.logger.error("Error signaling root enumerator: \(error.localizedDescription)")
+            }
+        }
+        
         manager.signalEnumerator(for: .workingSet) { error in
             if let error = error {
-                self.logger.error("Error signaling enumerator: \(error.localizedDescription)")
+                self.logger.error("Error signaling working set enumerator: \(error.localizedDescription)")
             }
         }
     }

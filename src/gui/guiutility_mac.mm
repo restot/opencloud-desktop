@@ -20,7 +20,7 @@
 
 #include "application.h"
 #include "guiutility.h"
-#include "fileproviderdomainmanager.h"
+#include "macOS/fileprovider.h"
 
 #include "libsync/theme.h"
 
@@ -59,8 +59,9 @@ void Utility::startShellIntegration()
     _system(QStringLiteral("pluginkit"),
         {QStringLiteral("-e"), QStringLiteral("use"), QStringLiteral("-i"), Theme::instance()->orgDomainName() + QStringLiteral(".FileProviderExt")});
 
-    // Register the FileProvider domain with the system
-    FileProviderDomainManager::registerDomain();
+    // Initialize FileProvider integration (domain manager + XPC)
+    // This will register domains for all existing accounts
+    Mac::FileProvider::instance();
 }
 
 QString Utility::socketApiSocketPath()

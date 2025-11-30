@@ -17,5 +17,6 @@
 
 #import "LineProcessor.h"
 #import "LocalSocketClient.h"
+#import "Services/ClientCommunicationProtocol.h"
 
 #endif /* FileProviderExt_Bridging_Header_h */

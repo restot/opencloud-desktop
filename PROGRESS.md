@@ -1,9 +1,9 @@
 # OpenCloud macOS Extensions – Progress
 
 ## Current Status
-- FileProviderExt: Integrated into core app build; domain registers on app launch; PoC enumeration works ✅
+- FileProviderExt: **Phase 2 Complete** – Account-aware domains, XPC service for credentials ✅
 - FinderSyncExt: **Phase 1 Complete** – Unix socket IPC working, extension enabled ✅
-- App version: 3.1.5
+- App version: 3.1.6
 
 ## Implementation Progress
 
@@ -20,26 +20,35 @@
 | 1.6 Finder Integration UI | ✅ Done | Settings button + first-launch prompt |
 | 1.7 Sandbox FinderSyncExt | ✅ Done | Required for pluginkit registration |
 
-### Phase 2: FileProviderExt Real Integration
+### Phase 2: FileProvider Account Integration ✅ COMPLETE
+**Goal**: Account-aware domains with XPC communication
+
+| Task | Status | Notes |
+|------|-----------|-------|
+| 2.1 Account-Aware DomainManager | ✅ Done | Domains per account with UUID identifiers |
+| 2.2 ClientCommunicationProtocol | ✅ Done | Obj-C protocol for XPC interface |
+| 2.3 ClientCommunicationService | ✅ Done | NSFileProviderServiceSource in extension |
+| 2.4 FileProviderXPC Client | ✅ Done | Main app connects via NSFileProviderManager.getService() |
+| 2.5 FileProvider Coordinator | ✅ Done | FileProvider singleton manages domain manager + XPC |
+| 2.6 Account Lifecycle | ✅ Done | Domains created/removed on account add/remove |
+
+### Phase 3: Real File Operations
 **Goal**: On-demand file download like iCloud
 
 | Task | Status | Notes |
-|------|--------|-------|
-| 2.1 Add ClientCommunicationService | ⬜ Not Started | NSFileProviderServiceSource |
-| 2.2 FileProviderExt Socket Client | ⬜ Not Started | Extension → Main App communication |
-| 2.3 Main App XPC Client | ⬜ Not Started | Via NSFileProviderManager |
-| 2.4 Real File Enumeration | ⬜ Not Started | Query sync journal |
-| 2.5 On-Demand Download | ⬜ Not Started | fetchContents implementation |
+|------|-----------|-------|
+| 3.1 Real File Enumeration | ⬜ Not Started | Query sync journal/server |
+| 3.2 On-Demand Download | ⬜ Not Started | fetchContents implementation |
+| 3.3 Upload Handling | ⬜ Not Started | createItem, modifyItem |
 
-### Phase 3: Full VFS Features
+### Phase 4: Full VFS Features
 **Goal**: Complete iCloud-like experience
 
 | Task | Status | Notes |
-|------|--------|-------|
-| 3.1 Download States | ⬜ Not Started | Cloud-only, downloading, downloaded |
-| 3.2 Upload Handling | ⬜ Not Started | createItem, modifyItem |
-| 3.3 Eviction (Offloading) | ⬜ Not Started | Like iCloud "Optimize Mac Storage" |
-| 3.4 Progress Reporting | ⬜ Not Started | NSProgress integration |
+|------|-----------|-------|
+| 4.1 Download States | ⬜ Not Started | Cloud-only, downloading, downloaded |
+| 4.2 Eviction (Offloading) | ⬜ Not Started | Like iCloud "Optimize Mac Storage" |
+| 4.3 Progress Reporting | ⬜ Not Started | NSProgress integration |
 
 ## What Works
 
@@ -112,10 +121,11 @@ OpenCloud.app
 ```
 
 ### Key Files
-- `src/gui/fileproviderdomainmanager_mac.mm` – registers FileProvider domain
+- `src/gui/macOS/fileprovider*.mm` – FileProvider coordinator, domain manager, XPC client
 - `shell_integration/.../FileProviderExt/*.swift` – extension implementation
-- `shell_integration/.../FinderSyncExt/SyncClientProxy.*` – Finder XPC client (to be replaced)
-- `src/gui/socketapi/socketapisocket_mac.mm` – XPC server (to be replaced with Unix socket)
+- `shell_integration/.../FileProviderExt/Services/*` – ClientCommunicationService XPC
+- `shell_integration/.../FinderSyncExt/*.m` – FinderSync socket client
+- `src/gui/socketapi/socketapisocket_mac.mm` – Unix socket server
 
 ## Files to Create/Modify
 
