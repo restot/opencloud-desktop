@@ -3,10 +3,6 @@
 <plist version="1.0">
 <dict>
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
-	<key>com.apple.security.application-groups</key>
-	<array>
-		<string>$(OC_SOCKETAPI_TEAM_IDENTIFIER_PREFIX)$(OC_APPLICATION_REV_DOMAIN)</string>
-	</array>
+	<false/>
 </dict>
 </plist>

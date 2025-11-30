@@ -30,6 +30,8 @@
         <string>com.apple.fileprovider-nonui</string>
         <key>NSExtensionPrincipalClass</key>
         <string>$(PRODUCT_MODULE_NAME).FileProviderExtension</string>
+        <key>NSExtensionFileProviderSupportsEnumeration</key>
+        <true/>
     </dict>
     <key>AppGroupIdentifier</key>
     <string>$(OC_APPLICATION_REV_DOMAIN)</string>

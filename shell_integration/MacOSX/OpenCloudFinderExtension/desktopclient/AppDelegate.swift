@@ -21,6 +21,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let domainIdentifier = NSFileProviderDomainIdentifier("OpenCloud")
         let domain = NSFileProviderDomain(identifier: domainIdentifier, displayName: "OpenCloud")
         
+        // Ensure domain is visible in Finder sidebar
+        domain.isHidden = false
+        
         // First remove any existing domain to ensure clean state
         NSFileProviderManager.remove(domain) { removeError in
             if let removeError = removeError {
