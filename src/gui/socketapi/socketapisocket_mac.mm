@@ -169,7 +169,7 @@ public:
     // For now, broadcast to the most recent socket (in practice there's usually one client)
     if (!self.wrapper->pendingConnections.isEmpty()) {
         SocketApiSocket *socket = self.wrapper->pendingConnections.last();
-        SocketApiSocketPrivate *d = socket->d_ptr.data();
+        SocketApiSocketPrivate *d = socket->socketPrivate();
         d->inBuffer += QByteArray::fromRawNSData(msg);
         Q_EMIT socket->readyRead();
     }

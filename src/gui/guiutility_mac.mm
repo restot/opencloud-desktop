@@ -15,6 +15,7 @@
 
 #include "application.h"
 #include "guiutility.h"
+#include "fileproviderdomainmanager.h"
 
 #include "libsync/theme.h"
 
@@ -42,12 +43,18 @@ void Utility::startShellIntegration()
         }
     };
 
-    // Add it again. This was needed for Mojave to trigger a load.
+    // Register FinderSyncExt (overlay icons and context menus)
     _system(QStringLiteral("pluginkit"), { QStringLiteral("-a"), QStringLiteral("%1Contents/PlugIns/FinderSyncExt.appex/").arg(bundlePath) });
-
-    // Tell Finder to use the Extension (checking it from System Preferences -> Extensions)
     _system(QStringLiteral("pluginkit"),
         {QStringLiteral("-e"), QStringLiteral("use"), QStringLiteral("-i"), Theme::instance()->orgDomainName() + QStringLiteral(".FinderSyncExt")});
+
+    // Register FileProviderExt (virtual file system in Finder sidebar)
+    _system(QStringLiteral("pluginkit"), { QStringLiteral("-a"), QStringLiteral("%1Contents/PlugIns/FileProviderExt.appex/").arg(bundlePath) });
+    _system(QStringLiteral("pluginkit"),
+        {QStringLiteral("-e"), QStringLiteral("use"), QStringLiteral("-i"), Theme::instance()->orgDomainName() + QStringLiteral(".FileProviderExt")});
+
+    // Register the FileProvider domain with the system
+    FileProviderDomainManager::registerDomain();
 }
 
 QString Utility::socketApiSocketPath()

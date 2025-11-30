@@ -38,6 +38,10 @@ public:
 Q_SIGNALS:
     void disconnected();
 
+public:
+    // Accessor for internal use by Objective-C XPC handlers
+    SocketApiSocketPrivate *socketPrivate() { return d_ptr.data(); }
+
 private:
     // Use Qt's p-impl system to hide objective-c types from C++ code including this file
     Q_DECLARE_PRIVATE(SocketApiSocket)

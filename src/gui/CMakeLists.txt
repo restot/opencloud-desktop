@@ -145,8 +145,14 @@ IF( APPLE )
             notifications/macnotifications.mm
             settingsdialog_mac.mm
             guiutility_mac.mm
-            folderwatcher_mac.cpp)
+            folderwatcher_mac.cpp
+            fileproviderdomainmanager_mac.mm
+            fileproviderdomainmanager.h)
     set_source_files_properties(guiutility_mac.mm PROPERTIES COMPILE_DEFINITIONS SOCKETAPI_TEAM_IDENTIFIER_PREFIX="${SOCKETAPI_TEAM_IDENTIFIER_PREFIX}")
+    # Enable ARC for socketapisocket_mac.mm as it uses __weak references in XPC handlers
+    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/socketapi/socketapisocket_mac.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    find_library(FILEPROVIDER_FRAMEWORK FileProvider)
+    target_link_libraries(OpenCloudGui PRIVATE ${FILEPROVIDER_FRAMEWORK})
 elseif( WIN32 )
     target_sources(OpenCloudGui PRIVATE
             guiutility_win.cpp
