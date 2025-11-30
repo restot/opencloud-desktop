@@ -52,14 +52,21 @@
         return;
     }
 
+    // Read the server's endpoint from the shared file
+    NSXPCListenerEndpoint *serverEndpoint = [self readServerEndpoint];
+    if (!serverEndpoint) {
+        NSLog(@"SyncClientProxy: Could not read server endpoint, will retry");
+        [self scheduleRetry];
+        return;
+    }
+
     // Create an anonymous listener for the server to call back into us
     self.clientListener = [NSXPCListener anonymousListener];
     self.clientListener.delegate = self;
     [self.clientListener resume];
 
-    // Connect to the main app's XPC service
-    self.serverConnection = [[NSXPCConnection alloc] initWithMachServiceName:self.serverName
-                                                                     options:0];
+    // Connect to the main app using the endpoint from the file
+    self.serverConnection = [[NSXPCConnection alloc] initWithListenerEndpoint:serverEndpoint];
     
     // Set up the interface for messages we send TO the server
     self.serverConnection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SyncClientXPCToServer)];
@@ -84,6 +91,38 @@
     }];
     
     [server registerClientWithEndpoint:self.clientListener.endpoint];
+}
+
+- (NSXPCListenerEndpoint *)readServerEndpoint
+{
+    // Read the endpoint from Application Support/OpenCloud/<serviceName>.endpoint
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES);
+    if (paths.count == 0) {
+        NSLog(@"SyncClientProxy: Could not find Application Support directory");
+        return nil;
+    }
+    
+    NSString *appSupport = [paths firstObject];
+    NSString *endpointFile = [appSupport stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"OpenCloud/%@.endpoint", self.serverName]];
+    
+    NSData *endpointData = [NSData dataWithContentsOfFile:endpointFile];
+    if (!endpointData) {
+        NSLog(@"SyncClientProxy: Endpoint file not found at %@", endpointFile);
+        return nil;
+    }
+    
+    NSError *error = nil;
+    NSXPCListenerEndpoint *endpoint = [NSKeyedUnarchiver unarchivedObjectOfClass:[NSXPCListenerEndpoint class]
+                                                                        fromData:endpointData
+                                                                           error:&error];
+    if (error) {
+        NSLog(@"SyncClientProxy: Failed to unarchive endpoint: %@", error);
+        return nil;
+    }
+    
+    NSLog(@"SyncClientProxy: Successfully read endpoint from %@", endpointFile);
+    return endpoint;
 }
 
 #pragma mark - NSXPCListenerDelegate
