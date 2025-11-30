@@ -112,7 +112,7 @@ pwsh .github/workflows/.craft.ps1 -c --install opencloud/opencloud-desktop
 **Filtering build output:**
 ```bash
 # Show only errors and build status (useful for long builds)
-pwsh .github/workflows/.craft.ps1 -c opencloud/opencloud-desktop 2>&1 | grep -E "(error:|BUILD)" | tail -5
+pwsh .github/workflows/.craft.ps1 -c opencloud/opencloud-desktop 2>&1 | rg "error:|BUILD"
 ```
 
 ### Alternative: Plain CMake (Advanced)
@@ -148,7 +148,11 @@ qmlformat -i <file.qml>
 # C++ formatting (requires clang-format)
 clang-format -i <file.cpp>
 
-# The project has pre-commit hooks for formatting (requires ECM 5.79+)
+# Format staged changes before commit (project enforces this via pre-commit hook)
+git clang-format --staged --extensions 'cpp,h,hpp,c'
+
+# Preview formatting changes
+git clang-format --staged --extensions 'cpp,h,hpp,c' --diff
 ```
 
 ### Build Options
