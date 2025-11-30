@@ -47,6 +47,10 @@
 #include <qt_windows.h>
 #endif
 
+#ifdef Q_OS_MAC
+#include "macOS/fileprovider.h"
+#endif
+
 #include <QApplication>
 #include <QDesktopServices>
 #include <QMenuBar>
@@ -168,6 +172,9 @@ Application::Application(const QString &displayLanguage, bool debugMode)
     auto *menu = menuBar->addMenu(QString());
     // the actual name is provided by mac
     menu->addAction(QStringLiteral("About"), this, &Application::showAbout)->setMenuRole(QAction::AboutRole);
+    
+    // Initialize FileProvider integration (registers domains for logged-in accounts)
+    Mac::FileProvider::instance();
 #endif
 #ifdef Q_OS_WIN
     // update the existing sidebar entries

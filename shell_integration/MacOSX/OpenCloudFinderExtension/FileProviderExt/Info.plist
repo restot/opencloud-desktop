@@ -25,7 +25,7 @@
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionFileProviderDocumentGroup</key>
-        <string>group.$(OC_APPLICATION_REV_DOMAIN)</string>
+        <string>$(TeamIdentifierPrefix)eu.opencloud.desktopclient</string>
         <key>NSExtensionPointIdentifier</key>
         <string>com.apple.fileprovider-nonui</string>
         <key>NSExtensionPrincipalClass</key>
@@ -34,6 +34,6 @@
         <true/>
     </dict>
     <key>AppGroupIdentifier</key>
-    <string>$(OC_APPLICATION_REV_DOMAIN)</string>
+    <string>$(TeamIdentifierPrefix)eu.opencloud.desktopclient</string>
 </dict>
 </plist>

@@ -1,7 +1,7 @@
 # OpenCloud macOS Extensions – Progress
 
 ## Current Status
-- FileProviderExt: **Phase 2 Complete** – Account-aware domains, XPC service for credentials ✅
+- FileProviderExt: **Phase 3 In Progress** – WebDAV client + database added, XPC auth debugging ⚙️
 - FinderSyncExt: **Phase 1 Complete** – Unix socket IPC working, extension enabled ✅
 - App version: 3.1.6
 
@@ -32,14 +32,18 @@
 | 2.5 FileProvider Coordinator | ✅ Done | FileProvider singleton manages domain manager + XPC |
 | 2.6 Account Lifecycle | ✅ Done | Domains created/removed on account add/remove |
 
-### Phase 3: Real File Operations
+### Phase 3: Real File Operations ⚙️ IN PROGRESS
 **Goal**: On-demand file download like iCloud
 
 | Task | Status | Notes |
 |------|-----------|-------|
-| 3.1 Real File Enumeration | ⬜ Not Started | Query sync journal/server |
-| 3.2 On-Demand Download | ⬜ Not Started | fetchContents implementation |
-| 3.3 Upload Handling | ⬜ Not Started | createItem, modifyItem |
+| 3.1 WebDAV Client | ✅ Done | WebDAVClient.swift with PROPFIND, GET, PUT, DELETE, MKCOL |
+| 3.2 Item Database | ✅ Done | SQLite-based ItemDatabase.swift + ItemMetadata.swift |
+| 3.3 WebDAV XML Parser | ✅ Done | WebDAVXMLParser.swift parses PROPFIND responses |
+| 3.4 XPC Auth Flow | ⚙️ In Progress | Main app sends OAuth token via XPC, extension receives |
+| 3.5 Real File Enumeration | ⬜ Not Started | Wire WebDAV to enumerator |
+| 3.6 On-Demand Download | ⬜ Not Started | fetchContents with WebDAV GET |
+| 3.7 Upload Handling | ⬜ Not Started | createItem, modifyItem with WebDAV PUT |
 
 ### Phase 4: Full VFS Features
 **Goal**: Complete iCloud-like experience

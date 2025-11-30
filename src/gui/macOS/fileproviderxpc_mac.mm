@@ -57,6 +57,7 @@ FileProviderXPC::~FileProviderXPC()
 
 void FileProviderXPC::connectToFileProviderDomains()
 {
+    NSLog(@"OpenCloud XPC: connectToFileProviderDomains() called");
     qCInfo(lcFileProviderXPC) << "Connecting to file provider domains...";
     
     if (@available(macOS 11.0, *)) {
@@ -64,6 +65,7 @@ void FileProviderXPC::connectToFileProviderDomains()
         dispatch_group_enter(group);
         
         [NSFileProviderManager getDomainsWithCompletionHandler:^(NSArray<NSFileProviderDomain *> *domains, NSError *error) {
+            NSLog(@"OpenCloud XPC: getDomainsWithCompletionHandler callback, error=%@, count=%lu", error, (unsigned long)domains.count);
             if (error) {
                 qCWarning(lcFileProviderXPC) << "Error getting file provider domains:" 
                                              << QString::fromNSString(error.localizedDescription);
@@ -71,6 +73,7 @@ void FileProviderXPC::connectToFileProviderDomains()
                 return;
             }
             
+            NSLog(@"OpenCloud XPC: Found %lu domains", (unsigned long)domains.count);
             qCInfo(lcFileProviderXPC) << "Found" << domains.count << "file provider domains";
             
             for (NSFileProviderDomain *domain in domains) {
@@ -211,9 +214,11 @@ void FileProviderXPC::connectToFileProviderDomains()
 
 void FileProviderXPC::authenticateFileProviderDomains()
 {
+    NSLog(@"OpenCloud XPC: authenticateFileProviderDomains() called, services count=%d", _clientCommServices.count());
     qCInfo(lcFileProviderXPC) << "Authenticating all file provider domains...";
     
     for (const auto &domainId : _clientCommServices.keys()) {
+        NSLog(@"OpenCloud XPC: Authenticating domain: %s", domainId.toUtf8().constData());
         authenticateFileProviderDomain(domainId);
     }
 }
@@ -246,10 +251,19 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
     NSString *userId = account->uuid().toString(QUuid::WithoutBraces).toNSString();
     NSString *serverUrl = account->url().toString().toNSString();
     
-    // Get password/token - for OAuth, this is the access token
-    // Note: HttpCredentials doesn't expose the access token directly
-    // The extension will need to handle authentication separately
+    // Get password/token - for OAuth, get the access token from HttpCredentials
     NSString *password = @"";
+    if (auto *httpCreds = qobject_cast<HttpCredentials *>(credentials)) {
+        QString accessToken = httpCreds->accessToken();
+        if (!accessToken.isEmpty()) {
+            password = accessToken.toNSString();
+            qCDebug(lcFileProviderXPC) << "Using access token for authentication";
+        } else {
+            qCWarning(lcFileProviderXPC) << "Access token is empty";
+        }
+    } else {
+        qCWarning(lcFileProviderXPC) << "Credentials are not HttpCredentials";
+    }
     
     // Get the service proxy
     void *servicePtr = _clientCommServices.value(domainIdentifier);

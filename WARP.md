@@ -10,7 +10,7 @@ OpenCloud Desktop is a Qt-based C++ desktop synchronization client for OpenCloud
 - **Language**: C++20
 - **Build System**: CMake 3.18+ with KDE ECM (Extra CMake Modules)
 - **Database**: SQLite3
-- **Version**: 3.1.4 (see VERSION.cmake)
+- **Version**: 3.1.6 (see VERSION.cmake)
 
 ## Build System & Development Commands
 

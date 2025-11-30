@@ -39,6 +39,7 @@ FileProvider *FileProvider::instance()
 FileProvider::FileProvider(QObject *parent)
     : QObject(parent)
 {
+    NSLog(@"OpenCloud: FileProvider::FileProvider() called");
     qCInfo(lcFileProvider) << "Initializing FileProvider integration";
     
     if (!fileProviderAvailable()) {
