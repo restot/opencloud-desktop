@@ -65,11 +65,13 @@ public:
 
     void findExistingFileProviderDomains()
     {
+        NSLog(@"[FPDomainManager] findExistingFileProviderDomains starting...");
         dispatch_group_t group = dispatch_group_create();
         dispatch_group_enter(group);
 
         [NSFileProviderManager getDomainsWithCompletionHandler:^(NSArray<NSFileProviderDomain *> *domains, NSError *error) {
             if (error) {
+                NSLog(@"[FPDomainManager] getDomainsWithCompletionHandler error: %@", error);
                 qCWarning(lcFileProviderDomainManager) << "Could not get existing file provider domains:"
                                                        << QString::fromNSString(error.localizedDescription);
                 dispatch_group_leave(group);
@@ -151,6 +153,7 @@ public:
     void addFileProviderDomain(const AccountState *accountState)
     {
         if (!accountState || !accountState->account()) {
+            NSLog(@"[FPDomainManager] addFileProviderDomain: no account");
             return;
         }
 
@@ -158,6 +161,8 @@ public:
         const QString domainId = domainIdentifierFromAccount(account.get());
         const QString displayName = domainDisplayNameFromAccount(account.get());
 
+        NSLog(@"[FPDomainManager] Adding domain: %s, displayName: %s", 
+              domainId.toUtf8().constData(), displayName.toUtf8().constData());
         qCInfo(lcFileProviderDomainManager) << "Adding file provider domain:" << domainId
                                             << "displayName:" << displayName;
 
@@ -171,14 +176,17 @@ public:
                    displayName:displayName.toNSString()];
         domain.hidden = NO;
 
+        NSLog(@"[FPDomainManager] Calling NSFileProviderManager addDomain...");
         [NSFileProviderManager addDomain:domain completionHandler:^(NSError *error) {
             if (error) {
+                NSLog(@"[FPDomainManager] Error adding domain: %@", error);
                 qCWarning(lcFileProviderDomainManager) << "Error adding domain:" << domainId
                                                        << QString::fromNSString(error.localizedDescription);
                 [domain release];
                 return;
             }
 
+            NSLog(@"[FPDomainManager] Successfully added domain");
             qCInfo(lcFileProviderDomainManager) << "Successfully added domain:" << domainId;
             _registeredDomains.insert(domainId, domain);
 
@@ -282,7 +290,9 @@ FileProviderDomainManager::~FileProviderDomainManager() = default;
 
 void FileProviderDomainManager::start()
 {
+    NSLog(@"[FPDomainManager] start() called");
     if (!d) {
+        NSLog(@"[FPDomainManager] start() - no impl, returning");
         return;
     }
 
@@ -317,13 +327,19 @@ void FileProviderDomainManager::updateFileProviderDomains()
         return;
     }
 
+    const auto accounts = AccountManager::instance()->accounts();
+    NSLog(@"[FPDomainManager] updateFileProviderDomains - %lu accounts", (unsigned long)accounts.size());
     qCDebug(lcFileProviderDomainManager) << "Updating file provider domains";
 
     // Add domains for any accounts that don't have one
-    for (const auto &accountState : AccountManager::instance()->accounts()) {
+    for (const auto &accountState : accounts) {
         const QString domainId = domainIdentifierFromAccount(accountState->account().get());
+        NSLog(@"[FPDomainManager] Checking account domainId: %s", domainId.toUtf8().constData());
         if (!d->registeredDomainIds().contains(domainId)) {
+            NSLog(@"[FPDomainManager] Domain not registered, adding...");
             addFileProviderDomainForAccount(accountState.data());
+        } else {
+            NSLog(@"[FPDomainManager] Domain already registered");
         }
     }
 

@@ -128,10 +128,17 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         logger.debug("Fetching directory listing for: \(path)")
         
         // Fetch from WebDAV
+        NSLog("[Enumerator] Fetching directory: %@", path)
         let webdavItems = try await webdav.listDirectory(path: path)
+        
+        NSLog("[Enumerator] Got %d items from WebDAV for path: %@", webdavItems.count, path)
+        for (idx, item) in webdavItems.enumerated() {
+            NSLog("[Enumerator] Item[%d]: filename=%@, remotePath=%@, isDir=%d", idx, item.filename, item.remotePath, item.isDirectory)
+        }
         
         // First item is the directory itself, skip it
         let childItems = webdavItems.dropFirst()
+        NSLog("[Enumerator] After dropFirst: %d child items", childItems.count)
         
         // Convert to metadata and store in database
         var fileProviderItems: [NSFileProviderItem] = []

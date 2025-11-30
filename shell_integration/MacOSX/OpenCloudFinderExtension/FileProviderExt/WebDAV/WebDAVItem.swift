@@ -69,7 +69,9 @@ struct WebDAVItem: Sendable {
     
     /// Extract filename from remote path
     static func extractFilename(from remotePath: String) -> String {
-        let normalizedPath = remotePath.hasSuffix("/") ? String(remotePath.dropLast()) : remotePath
+        // URL decode the path first
+        let decodedPath = remotePath.removingPercentEncoding ?? remotePath
+        let normalizedPath = decodedPath.hasSuffix("/") ? String(decodedPath.dropLast()) : decodedPath
         if let lastSlash = normalizedPath.lastIndex(of: "/") {
             return String(normalizedPath[normalizedPath.index(after: lastSlash)...])
         }

@@ -6,6 +6,9 @@
     <true/>
     <key>com.apple.security.application-groups</key>
     <array>
+        <!-- Note: $(TeamIdentifierPrefix) should be expanded by Xcode during build.
+             For manual signing without Xcode, use the literal Team ID prefix.
+             Example: S6P3V9X548.eu.opencloud.desktop -->
         <string>$(TeamIdentifierPrefix)eu.opencloud.desktop</string>
     </array>
     <key>com.apple.security.network.client</key>

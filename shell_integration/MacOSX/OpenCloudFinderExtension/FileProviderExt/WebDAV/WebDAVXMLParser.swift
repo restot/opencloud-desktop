@@ -227,27 +227,47 @@ private struct ResponseBuilder {
     var isSuccess: Bool = false
     
     func build(baseURL: URL) -> WebDAVItem? {
-        guard let href = href else { return nil }
+        guard let href = href else {
+            NSLog("[WebDAVXMLParser] build: no href")
+            return nil
+        }
+        
+        NSLog("[WebDAVXMLParser] build: href=%@, isDir=%d, contentType=%@", href, isDirectory, contentType ?? "nil")
+        
+        // URL decode the href first
+        let decodedHref = href.removingPercentEncoding ?? href
         
         // Resolve href to full path
         let remotePath: String
-        if href.hasPrefix("/") {
-            remotePath = href
+        if decodedHref.hasPrefix("/") {
+            remotePath = decodedHref
         } else if let url = URL(string: href, relativeTo: baseURL) {
-            remotePath = url.path
+            remotePath = url.path.removingPercentEncoding ?? url.path
         } else {
-            remotePath = href
+            remotePath = decodedHref
         }
         
-        // Determine if directory from content type or resourcetype
-        let isDir = isDirectory || contentType == "httpd/unix-directory"
+        // Determine if directory from content type, resourcetype, or trailing slash
+        // Folders often have trailing slash in href or httpd/unix-directory content type
+        let isDir = isDirectory || contentType == "httpd/unix-directory" || href.hasSuffix("/")
         
         // Use ocId if available, otherwise generate from path
         let identifier = ocId ?? WebDAVItem.generateIdentifier(from: remotePath)
         let fileIdentifier = fileId ?? identifier
         
-        // Extract filename from path
-        let filename = WebDAVItem.extractFilename(from: remotePath)
+        // Extract filename from path (after removing /remote.php/webdav prefix if present)
+        var cleanPath = remotePath
+        if let range = cleanPath.range(of: "/remote.php/webdav") {
+            cleanPath = String(cleanPath[range.upperBound...])
+        }
+        if let range = cleanPath.range(of: "/remote.php/dav/files/") {
+            // Handle /remote.php/dav/files/<user>/ format
+            let afterPrefix = cleanPath[range.upperBound...]
+            if let userSlash = afterPrefix.firstIndex(of: "/") {
+                cleanPath = String(afterPrefix[userSlash...])
+            }
+        }
+        let filename = WebDAVItem.extractFilename(from: cleanPath)
         
         return WebDAVItem(
             ocId: identifier,

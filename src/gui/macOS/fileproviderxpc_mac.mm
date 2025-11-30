@@ -13,6 +13,7 @@
  */
 
 #include "macOS/fileproviderxpc.h"
+#include "macOS/fileprovider.h"
 #include "macOS/fileproviderdomainmanager.h"
 
 #include <QLoggingCategory>
@@ -66,17 +67,90 @@ void FileProviderXPC::connectToFileProviderDomains()
         
         [NSFileProviderManager getDomainsWithCompletionHandler:^(NSArray<NSFileProviderDomain *> *domains, NSError *error) {
             NSLog(@"OpenCloud XPC: getDomainsWithCompletionHandler callback, error=%@, count=%lu", error, (unsigned long)domains.count);
-            if (error) {
-                qCWarning(lcFileProviderXPC) << "Error getting file provider domains:" 
-                                             << QString::fromNSString(error.localizedDescription);
-                dispatch_group_leave(group);
-                return;
+            
+            // If getDomainsWithCompletionHandler fails (common after restart), use URL-based discovery
+            NSMutableArray<NSFileProviderDomain *> *domainsToProcess = [NSMutableArray array];
+            
+            if (error || domains.count == 0) {
+                qCInfo(lcFileProviderXPC) << "getDomainsWithCompletionHandler failed, using URL-based discovery";
+                
+                // Use the CloudStorage URL to access the extension's service directly
+                NSFileManager *fm = [NSFileManager defaultManager];
+                NSURL *cloudStorageURL = [fm URLForDirectory:NSLibraryDirectory 
+                                                  inDomain:NSUserDomainMask 
+                                         appropriateForURL:nil 
+                                                    create:NO 
+                                                     error:nil];
+                cloudStorageURL = [cloudStorageURL URLByAppendingPathComponent:@"CloudStorage"];
+                
+                NSArray *contents = [fm contentsOfDirectoryAtURL:cloudStorageURL 
+                                      includingPropertiesForKeys:nil 
+                                                         options:NSDirectoryEnumerationSkipsHiddenFiles 
+                                                           error:nil];
+                
+                for (NSURL *folderURL in contents) {
+                    NSString *folderName = [folderURL lastPathComponent];
+                    // Look for folders starting with "OpenCloud-" which are our domains
+                    if ([folderName hasPrefix:@"OpenCloud-"]) {
+                        NSLog(@"OpenCloud XPC: Found CloudStorage folder: %@", folderName);
+                        
+                        // Get services from this folder
+                        dispatch_group_enter(group);
+                        [fm getFileProviderServicesForItemAtURL:folderURL
+                                              completionHandler:^(NSDictionary<NSFileProviderServiceName, NSFileProviderService *> *services, NSError *svcError) {
+                            if (svcError) {
+                                NSLog(@"OpenCloud XPC: Error getting services from URL: %@", svcError);
+                                dispatch_group_leave(group);
+                                return;
+                            }
+                            
+                            NSFileProviderService *service = services[clientCommunicationServiceName];
+                            if (!service) {
+                                NSLog(@"OpenCloud XPC: ClientCommunicationService not found at URL");
+                                dispatch_group_leave(group);
+                                return;
+                            }
+                            
+                            NSLog(@"OpenCloud XPC: Found ClientCommunicationService, getting connection...");
+                            [service getFileProviderConnectionWithCompletionHandler:^(NSXPCConnection *connection, NSError *connError) {
+                                if (connError || !connection) {
+                                    NSLog(@"OpenCloud XPC: Error getting connection: %@", connError);
+                                    dispatch_group_leave(group);
+                                    return;
+                                }
+                                
+                                connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(ClientCommunicationProtocol)];
+                                [connection resume];
+                                
+                                id<ClientCommunicationProtocol> proxy = [connection remoteObjectProxyWithErrorHandler:^(NSError *proxyError) {
+                                    NSLog(@"OpenCloud XPC: Proxy error: %@", proxyError);
+                                }];
+                                
+                                if (proxy) {
+                                    [proxy getFileProviderDomainIdentifierWithCompletionHandler:^(NSString *extDomainId, NSError *idError) {
+                                        if (!idError && extDomainId) {
+                                            QString qDomainId = QString::fromNSString(extDomainId);
+                                            NSLog(@"OpenCloud XPC: Connected to domain via URL: %s", qDomainId.toUtf8().constData());
+                                            [(NSObject *)proxy retain];
+                                            _clientCommServices.insert(qDomainId, (void *)proxy);
+                                        }
+                                        dispatch_group_leave(group);
+                                    }];
+                                } else {
+                                    dispatch_group_leave(group);
+                                }
+                            }];
+                        }];
+                    }
+                }
+            } else {
+                [domainsToProcess addObjectsFromArray:domains];
             }
             
-            NSLog(@"OpenCloud XPC: Found %lu domains", (unsigned long)domains.count);
-            qCInfo(lcFileProviderXPC) << "Found" << domains.count << "file provider domains";
+            NSLog(@"OpenCloud XPC: Processing %lu domains", (unsigned long)domainsToProcess.count);
+            qCInfo(lcFileProviderXPC) << "Found" << domainsToProcess.count << "file provider domains";
             
-            for (NSFileProviderDomain *domain in domains) {
+            for (NSFileProviderDomain *domain in domainsToProcess) {
                 NSString *domainId = domain.identifier;
                 qCInfo(lcFileProviderXPC) << "Processing domain:" << QString::fromNSString(domainId);
                 

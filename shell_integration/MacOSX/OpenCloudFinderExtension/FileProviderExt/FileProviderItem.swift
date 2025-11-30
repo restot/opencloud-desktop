@@ -127,11 +127,13 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
             self.contentType = UTType(filenameExtension: ext) ?? .data
         }
         
-        self.documentSize = NSNumber(value: metadata.size)
-        self.creationDate = metadata.creationDate
-        self.contentModificationDate = metadata.lastModified
-        self._etag = metadata.etag
-        self._permissions = metadata.permissions
+        self.documentSize = metadata.size > 0 ? NSNumber(value: metadata.size) : nil
+        // Use current date as fallback if server didn't provide dates
+        self.creationDate = metadata.creationDate ?? metadata.syncTime
+        self.contentModificationDate = metadata.lastModified ?? metadata.syncTime
+        self._etag = metadata.etag.isEmpty ? UUID().uuidString : metadata.etag
+        // Provide default permissions if empty - folders need enumeration, files need reading
+        self._permissions = metadata.permissions.isEmpty ? (metadata.isDirectory ? "RGDNVCK" : "RGDNVW") : metadata.permissions
         self._isDownloaded = metadata.isDownloaded
         self._isDownloading = metadata.isDownloading
         self._isUploaded = metadata.isUploaded
