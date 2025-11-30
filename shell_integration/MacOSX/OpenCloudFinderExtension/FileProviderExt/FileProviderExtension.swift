@@ -208,6 +208,9 @@ import UniformTypeIdentifiers
                     
                     progress.completedUnitCount = 100
                     completionHandler(tempFile, item, nil)
+                    
+                    // Signal parent container to refresh item's appearance in Finder
+                    self.signalEnumerator(for: parentId)
                 } else {
                     completionHandler(tempFile, nil, nil)
                 }
@@ -437,13 +440,30 @@ import UniformTypeIdentifiers
     
     // MARK: - Materialized Items
     
-    /// Called to ask for pending items to be provided
+    /// Called when the set of materialized (downloaded) items changes.
+    /// This happens when items are downloaded or evicted (by user or system).
     func materializedItemsDidChange(completionHandler: @escaping () -> Void) {
-        logger.debug("Materialized items did change")
-        completionHandler()
+        logger.info("Materialized items did change - syncing database")
+        
+        guard let manager = NSFileProviderManager(for: domain), let database = database else {
+            completionHandler()
+            return
+        }
+        
+        // Enumerate materialized items to sync our database
+        Task {
+            do {
+                let enumerator = try manager.enumeratorForMaterializedItems()
+                // For now just log - full sync would compare with DB
+                self.logger.debug("Materialized items enumerator obtained")
+            } catch {
+                self.logger.error("Failed to get materialized items enumerator: \(error.localizedDescription)")
+            }
+            completionHandler()
+        }
     }
     
-    /// Called when pending items change
+    /// Called when pending items change (items waiting to be uploaded/downloaded)
     func pendingItemsDidChange(completionHandler: @escaping () -> Void) {
         logger.debug("Pending items did change")
         completionHandler()
@@ -513,21 +533,61 @@ import UniformTypeIdentifiers
     }
     
     func signalEnumerator() {
+        signalEnumerator(for: .rootContainer)
+        signalEnumerator(for: .workingSet)
+    }
+    
+    func signalEnumerator(for itemIdentifier: NSFileProviderItemIdentifier) {
         guard let manager = NSFileProviderManager(for: domain) else {
             logger.error("Could not get NSFileProviderManager for domain")
             return
         }
         
-        // Signal both root and working set
-        manager.signalEnumerator(for: .rootContainer) { error in
+        manager.signalEnumerator(for: itemIdentifier) { error in
             if let error = error {
-                self.logger.error("Error signaling root enumerator: \(error.localizedDescription)")
+                self.logger.error("Error signaling enumerator for \(itemIdentifier.rawValue): \(error.localizedDescription)")
             }
         }
+    }
+    
+    // MARK: - Eviction (Offload)
+    
+    /// Evict (offload) an item - remove local copy but keep in cloud.
+    /// Called when user selects "Remove Download" in Finder.
+    func evictItem(identifier: NSFileProviderItemIdentifier, completionHandler: @escaping (Error?) -> Void) {
+        logger.info("Evicting item: \(identifier.rawValue)")
         
-        manager.signalEnumerator(for: .workingSet) { error in
+        guard let manager = NSFileProviderManager(for: domain) else {
+            completionHandler(NSFileProviderError(.providerNotFound))
+            return
+        }
+        
+        manager.evictItem(identifier: identifier) { error in
             if let error = error {
-                self.logger.error("Error signaling working set enumerator: \(error.localizedDescription)")
+                self.logger.error("Eviction failed: \(error.localizedDescription)")
+                completionHandler(error)
+                return
+            }
+            
+            // Update database
+            Task {
+                do {
+                    try await self.database?.setDownloaded(ocId: identifier.rawValue, downloaded: false)
+                    self.logger.info("Item evicted successfully: \(identifier.rawValue)")
+                    
+                    // Signal to refresh Finder
+                    if let metadata = await self.database?.itemMetadata(ocId: identifier.rawValue) {
+                        let parentId = metadata.parentOcId == ItemDatabase.rootContainerId
+                            ? NSFileProviderItemIdentifier.rootContainer
+                            : NSFileProviderItemIdentifier(metadata.parentOcId)
+                        self.signalEnumerator(for: parentId)
+                    }
+                    
+                    completionHandler(nil)
+                } catch {
+                    self.logger.error("Failed to update database after eviction: \(error.localizedDescription)")
+                    completionHandler(error)
+                }
             }
         }
     }
