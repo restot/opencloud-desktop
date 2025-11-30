@@ -73,6 +73,12 @@
 - Extension loads and can be enabled in System Settings → Extensions
 - IPC migration complete (NSConnection → NSXPCConnection) - but XPC approach failed
 
+### Domain Registration & Cleanup (Nov 30, 2025)
+- Problem: Finder showed orphaned OpenCloud locations from previous builds (stale FileProvider domains).
+- Fix: Implemented `FileProviderDomainManager::removeAllDomains()` to remove all UUID-based domains owned by the app (skips system domains like iCloud).
+- Added CLI flag to host app: `--clear-fileprovider-domains` to perform cleanup without starting full UI.
+- Result: Orphaned OpenCloud domain removed; `~/Library/CloudStorage/` no longer contains stale OpenCloud folders.
+
 ## Critical Discovery (Nov 30, 2025)
 
 ### NSXPCListenerEndpoint Cannot Be Serialized to File
@@ -166,6 +172,9 @@ pluginkit -m -v | rg -i "eu.opencloud.desktop"
 # Check FileProvider domain
 fileproviderctl dump | rg -A5 "OpenCloud|eu.opencloud.desktop"
 
+# Clean all app FileProvider domains (useful after identifier/schema changes)
+~/Documents/craft/macos-clang-arm64/Applications/KDE/OpenCloud.app/Contents/MacOS/OpenCloud --clear-fileprovider-domains
+
 # Finder logs
 log stream --predicate 'process CONTAINS "FinderSyncExt"' --level debug
 
@@ -174,6 +183,8 @@ log stream --predicate 'process CONTAINS "OpenCloud" AND subsystem CONTAINS "soc
 ```
 
 ## Recent Commits
+- a0b776612 – docs: Update WARP.md to use rg for build filtering and add git clang-format commands
+- 22dd53930 – macOS: Add --clear-fileprovider-domains CLI and domain cleanup API
 - 346db296 – FinderSyncExt: remove app sandbox for local dev
 - ee8b53f64 – Integrate FileProviderExt + FinderSyncExt into core app (CMake), register domain
 - 75c3c44d6 – XPC server: anonymous listener + endpoint file
