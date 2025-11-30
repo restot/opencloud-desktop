@@ -273,11 +273,41 @@ bool SocketApiServer::listen(const QString &name)
     Q_D(SocketApiServer);
     d->serviceName = name;
     
-    // Create a named Mach service listener
-    // Note: The service name must be registered in the app's Info.plist or launchd configuration
-    d->listener = [[NSXPCListener alloc] initWithMachServiceName:name.toNSString()];
+    // Use an anonymous listener instead of a named Mach service
+    // This avoids the need for launchd registration
+    d->listener = [NSXPCListener anonymousListener];
     d->listener.delegate = d->server;
     [d->listener resume];
+    
+    // Serialize the endpoint to a file that clients can read
+    // The file is placed in a location accessible to both the app and extensions
+    NSXPCListenerEndpoint *endpoint = d->listener.endpoint;
+    if (endpoint) {
+        NSData *endpointData = [NSKeyedArchiver archivedDataWithRootObject:endpoint
+                                                     requiringSecureCoding:YES
+                                                                     error:nil];
+        if (endpointData) {
+            // Write to user's Application Support directory
+            NSArray *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES);
+            if (paths.count > 0) {
+                NSString *appSupport = [paths firstObject];
+                NSString *endpointDir = [appSupport stringByAppendingPathComponent:@"OpenCloud"];
+                
+                // Create directory if it doesn't exist
+                [[NSFileManager defaultManager] createDirectoryAtPath:endpointDir
+                                          withIntermediateDirectories:YES
+                                                           attributes:nil
+                                                                error:nil];
+                
+                // Write endpoint file with the service name
+                NSString *endpointFile = [endpointDir stringByAppendingPathComponent:
+                    [NSString stringWithFormat:@"%@.endpoint", name.toNSString()]];
+                [endpointData writeToFile:endpointFile atomically:YES];
+                
+                NSLog(@"SocketApiServer: Wrote XPC endpoint to %@", endpointFile);
+            }
+        }
+    }
     
     return YES;
 }
