@@ -60,6 +60,12 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         logger.debug("Enumerator invalidated for: \(self.enumeratedItemIdentifier.rawValue)")
     }
     
+    /// Maximum time to wait for authentication before failing
+    private static let authWaitTimeout: TimeInterval = 30.0
+    
+    /// Interval between auth checks
+    private static let authCheckInterval: TimeInterval = 0.5
+    
     // MARK: - NSFileProviderEnumerator
     
     func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt page: NSFileProviderPage) {
@@ -71,15 +77,11 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             return
         }
         
-        // Check if authenticated
-        guard ext.isAuthenticated else {
-            logger.warning("Not authenticated, cannot enumerate")
-            observer.finishEnumeratingWithError(NSFileProviderError(.notAuthenticated))
-            return
-        }
-        
         Task {
             do {
+                // Wait for authentication if not yet authenticated
+                try await waitForAuthentication(ext: ext)
+                
                 let items = try await enumerateItemsAsync(ext: ext)
                 logger.info("Enumerated \(items.count) items for \(self.enumeratedItemIdentifier.rawValue)")
                 observer.didEnumerate(items)
@@ -90,6 +92,29 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 observer.finishEnumeratingWithError(nsError)
             }
         }
+    }
+    
+    /// Wait for authentication to complete, polling until ready or timeout
+    private func waitForAuthentication(ext: FileProviderExtension) async throws {
+        let startTime = Date()
+        
+        while !ext.isAuthenticated {
+            let elapsed = Date().timeIntervalSince(startTime)
+            
+            if elapsed >= Self.authWaitTimeout {
+                logger.warning("Authentication timeout after \(elapsed)s - proceeding without auth")
+                throw NSFileProviderError(.notAuthenticated)
+            }
+            
+            // Log periodically
+            if Int(elapsed) % 5 == 0 && elapsed > 0 {
+                logger.info("Waiting for authentication... (\(Int(elapsed))s elapsed)")
+            }
+            
+            try await Task.sleep(nanoseconds: UInt64(Self.authCheckInterval * 1_000_000_000))
+        }
+        
+        logger.info("Authentication ready, proceeding with enumeration")
     }
     
     private func enumerateItemsAsync(ext: FileProviderExtension) async throws -> [NSFileProviderItem] {

@@ -20,6 +20,7 @@ add_custom_target( mac_overlayplugin ALL
         "OC_APPLICATION_NAME=${APPLICATION_NAME}"
         "OC_APPLICATION_REV_DOMAIN=${APPLICATION_REV_DOMAIN}"
         "OC_SOCKETAPI_TEAM_IDENTIFIER_PREFIX=${SOCKETAPI_TEAM_IDENTIFIER_PREFIX}"
+        "OC_APPLICATION_VERSION=${MIRALL_VERSION}"
     COMMENT "Building FinderSyncExt (Finder overlay icons)"
     VERBATIM)
 add_dependencies(mac_overlayplugin opencloud) # for the ${APPLICATION_ICON_NAME}.icns to be generated
@@ -33,6 +34,7 @@ add_custom_target( mac_fileprovider ALL
         "OC_APPLICATION_NAME=${APPLICATION_NAME}"
         "OC_APPLICATION_REV_DOMAIN=${APPLICATION_REV_DOMAIN}"
         "OC_SOCKETAPI_TEAM_IDENTIFIER_PREFIX=${SOCKETAPI_TEAM_IDENTIFIER_PREFIX}"
+        "OC_APPLICATION_VERSION=${MIRALL_VERSION}"
     COMMENT "Building FileProviderExt (Virtual file system)"
     VERBATIM)
 add_dependencies(mac_fileprovider opencloud)

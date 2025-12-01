@@ -49,15 +49,41 @@ void Utility::startShellIntegration()
         }
     };
 
-    // Register FinderSyncExt (overlay icons and context menus)
-    _system(QStringLiteral("pluginkit"), { QStringLiteral("-a"), QStringLiteral("%1Contents/PlugIns/FinderSyncExt.appex/").arg(bundlePath) });
-    _system(QStringLiteral("pluginkit"),
-        {QStringLiteral("-e"), QStringLiteral("use"), QStringLiteral("-i"), Theme::instance()->orgDomainName() + QStringLiteral(".FinderSyncExt")});
+    // Check if extension is already registered by querying pluginkit
+    auto isExtensionRegistered = [](const QString &bundleId) -> bool {
+        QProcess process;
+        process.start(QStringLiteral("pluginkit"), {QStringLiteral("-m"), QStringLiteral("-i"), bundleId});
+        if (!process.waitForFinished(5000)) {
+            return false;
+        }
+        QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        // Output is empty or "(no matches)" if not registered
+        return !output.isEmpty() && !output.contains(QStringLiteral("no matches"));
+    };
 
-    // Register FileProviderExt (virtual file system in Finder sidebar)
-    _system(QStringLiteral("pluginkit"), { QStringLiteral("-a"), QStringLiteral("%1Contents/PlugIns/FileProviderExt.appex/").arg(bundlePath) });
-    _system(QStringLiteral("pluginkit"),
-        {QStringLiteral("-e"), QStringLiteral("use"), QStringLiteral("-i"), Theme::instance()->orgDomainName() + QStringLiteral(".FileProviderExt")});
+    QString finderSyncBundleId = Theme::instance()->orgDomainName() + QStringLiteral(".FinderSyncExt");
+    QString fileProviderBundleId = Theme::instance()->orgDomainName() + QStringLiteral(".FileProviderExt");
+
+    // Register FinderSyncExt only if not already registered
+    // Re-registering can reset the user's enabled/disabled preference
+    if (!isExtensionRegistered(finderSyncBundleId)) {
+        qCInfo(lcGuiUtility) << "Registering FinderSyncExt for the first time";
+        _system(QStringLiteral("pluginkit"), { QStringLiteral("-a"), QStringLiteral("%1Contents/PlugIns/FinderSyncExt.appex/").arg(bundlePath) });
+        _system(QStringLiteral("pluginkit"),
+            {QStringLiteral("-e"), QStringLiteral("use"), QStringLiteral("-i"), finderSyncBundleId});
+    } else {
+        qCDebug(lcGuiUtility) << "FinderSyncExt already registered, skipping re-registration";
+    }
+
+    // Register FileProviderExt only if not already registered
+    if (!isExtensionRegistered(fileProviderBundleId)) {
+        qCInfo(lcGuiUtility) << "Registering FileProviderExt for the first time";
+        _system(QStringLiteral("pluginkit"), { QStringLiteral("-a"), QStringLiteral("%1Contents/PlugIns/FileProviderExt.appex/").arg(bundlePath) });
+        _system(QStringLiteral("pluginkit"),
+            {QStringLiteral("-e"), QStringLiteral("use"), QStringLiteral("-i"), fileProviderBundleId});
+    } else {
+        qCDebug(lcGuiUtility) << "FileProviderExt already registered, skipping re-registration";
+    }
 
     // Initialize FileProvider integration (domain manager + XPC)
     // This will register domains for all existing accounts
@@ -127,7 +153,8 @@ bool Utility::isInstalledByStore()
 bool Utility::isFinderSyncExtensionEnabled()
 {
     // Check if our FinderSync extension is enabled by querying pluginkit
-    // The extension is enabled if pluginkit -m returns our bundle ID
+    // pluginkit -m output format: "+/-  bundle.id(version)"
+    // "+" prefix = enabled, "-" prefix = disabled
     QString bundleId = Theme::instance()->orgDomainName() + QStringLiteral(".FinderSyncExt");
 
     QProcess process;
@@ -138,10 +165,11 @@ bool Utility::isFinderSyncExtensionEnabled()
     }
 
     QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
-    // If extension is registered and enabled, output contains the bundle ID
-    // If not, output is "(no matches)" or empty
-    bool enabled = !output.isEmpty() && !output.contains(QStringLiteral("no matches"));
-    qCDebug(lcGuiUtility) << "Finder Sync extension" << bundleId << "enabled:" << enabled;
+    // Output format: "+    eu.opencloud.desktop.FinderSyncExt(1.0)" (enabled)
+    //            or: "-    eu.opencloud.desktop.FinderSyncExt(1.0)" (disabled)
+    //            or: "(no matches)" (not registered)
+    bool enabled = output.startsWith(QLatin1Char('+'));
+    qCDebug(lcGuiUtility) << "Finder Sync extension" << bundleId << "enabled:" << enabled << "output:" << output;
     return enabled;
 }
 
