@@ -28,6 +28,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <Foundation/NSBundle.h>
+#import <Security/Security.h>
 
 namespace OCC {
 
@@ -98,34 +99,75 @@ QString Utility::socketApiSocketPath()
     // The socket must be in a location accessible to both the main app and the FinderSyncExt.
     // On macOS, this is the App Group container: ~/Library/Group Containers/<TEAM>.<bundle-id>/
     //
-    // For developer builds: App Group ID is just the domain (e.g., "eu.opencloud.desktop")
-    // For signed builds: App Group ID includes team prefix (e.g., "9B5WD74GWJ.eu.opencloud.desktop")
-    //
-    // SOCKETAPI_TEAM_IDENTIFIER_PREFIX is defined at build time:
-    //   - Empty string "" for ad-hoc/dev builds
-    //   - "TEAMID." for signed builds
+    // We try multiple possible App Group IDs to handle both dev and signed builds:
+    // 1. Build-time configured prefix (SOCKETAPI_TEAM_IDENTIFIER_PREFIX)
+    // 2. Team ID from code signing (if signed)
+    // 3. Plain domain without prefix (dev builds)
 
-    // Get the reverse domain from Theme (e.g., "eu.opencloud.desktop")
     QString revDomain = Theme::instance()->orgDomainName();
-
-    // Build app group ID: prefix + domain
-    // Note: For signed apps, prefix includes trailing dot ("TEAMID.")
-    QString teamPrefix = QStringLiteral(SOCKETAPI_TEAM_IDENTIFIER_PREFIX);
-    QString appGroupIdStr = teamPrefix + revDomain;
-    NSString *appGroupId = appGroupIdStr.toNSString();
-
-    qCDebug(lcGuiUtility) << "Looking for App Group container:" << appGroupIdStr;
-
-    NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:appGroupId];
-    if (container) {
-        NSURL *socketPath = [container URLByAppendingPathComponent:@".socket" isDirectory:NO];
-        qCInfo(lcGuiUtility) << "Using App Group socket path:" << QString::fromNSString(socketPath.path);
-        return QString::fromNSString(socketPath.path);
+    
+    // Try to get team identifier from code signing at runtime
+    auto getTeamIdentifierFromSigning = []() -> QString {
+        NSBundle *mainBundle = [NSBundle mainBundle];
+        if (!mainBundle) return QString();
+        
+        SecStaticCodeRef staticCode = NULL;
+        OSStatus status = SecStaticCodeCreateWithPath((__bridge CFURLRef)mainBundle.bundleURL, kSecCSDefaultFlags, &staticCode);
+        if (status != errSecSuccess || !staticCode) return QString();
+        
+        CFDictionaryRef signingInfo = NULL;
+        status = SecCodeCopySigningInformation(staticCode, kSecCSSigningInformation, &signingInfo);
+        CFRelease(staticCode);
+        
+        if (status != errSecSuccess || !signingInfo) return QString();
+        
+        QString teamId;
+        CFStringRef teamIdentifier = (CFStringRef)CFDictionaryGetValue(signingInfo, kSecCodeInfoTeamIdentifier);
+        if (teamIdentifier) {
+            teamId = QString::fromCFString(teamIdentifier);
+        }
+        CFRelease(signingInfo);
+        return teamId;
+    };
+    
+    // Build list of App Group IDs to try (in priority order)
+    QStringList appGroupIds;
+    
+    // 1. Build-time configured prefix
+    QString buildTimePrefix = QStringLiteral(SOCKETAPI_TEAM_IDENTIFIER_PREFIX);
+    if (!buildTimePrefix.isEmpty()) {
+        appGroupIds << (buildTimePrefix + revDomain);
+    }
+    
+    // 2. Runtime-detected team ID from code signing
+    QString teamId = getTeamIdentifierFromSigning();
+    if (!teamId.isEmpty()) {
+        QString signedAppGroup = teamId + QStringLiteral(".") + revDomain;
+        if (!appGroupIds.contains(signedAppGroup)) {
+            appGroupIds << signedAppGroup;
+        }
+    }
+    
+    // 3. Plain domain without prefix (dev builds)
+    if (!appGroupIds.contains(revDomain)) {
+        appGroupIds << revDomain;
+    }
+    
+    // Try each App Group ID until we find one that works
+    for (const QString &appGroupIdStr : appGroupIds) {
+        NSString *appGroupId = appGroupIdStr.toNSString();
+        qCDebug(lcGuiUtility) << "Trying App Group container:" << appGroupIdStr;
+        
+        NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:appGroupId];
+        if (container) {
+            NSURL *socketPath = [container URLByAppendingPathComponent:@".socket" isDirectory:NO];
+            qCInfo(lcGuiUtility) << "Using App Group socket path:" << QString::fromNSString(socketPath.path);
+            return QString::fromNSString(socketPath.path);
+        }
     }
 
     // Fallback for development without App Groups configured
-    // Use Application Support directory
-    qCWarning(lcGuiUtility) << "Could not get App Group container for" << appGroupIdStr
+    qCWarning(lcGuiUtility) << "Could not get App Group container for any of:" << appGroupIds
                             << "- falling back to Application Support";
 
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES);

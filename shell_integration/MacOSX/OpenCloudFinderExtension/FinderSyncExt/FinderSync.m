@@ -19,6 +19,7 @@
  */
 
 #import "FinderSync.h"
+#import <Security/Security.h>
 
 @interface FinderSync()
 {
@@ -62,8 +63,47 @@
         // Get socket path from App Group container
         // The socket file is created by the main app in the shared App Group container.
         // Path: ~/Library/Group Containers/<TEAM>.<bundle-id>/.socket
-        NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:socketApiPrefix];
-        NSURL *socketPath = [container URLByAppendingPathComponent:@".socket" isDirectory:NO];
+        // We try multiple possible App Group IDs to handle both dev and signed builds.
+        NSURL *container = nil;
+        NSURL *socketPath = nil;
+        
+        // Build list of App Group candidates to try
+        NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+        
+        // 1. Try Info.plist configured value first
+        if (socketApiPrefix.length > 0) {
+            [candidates addObject:socketApiPrefix];
+        }
+        
+        // 2. Try with team ID from code signing (if different from plist value)
+        NSString *teamId = [self getTeamIdentifierFromSigning];
+        if (teamId.length > 0) {
+            NSString *teamPrefixed = [NSString stringWithFormat:@"%@.eu.opencloud.desktop", teamId];
+            if (![candidates containsObject:teamPrefixed]) {
+                [candidates addObject:teamPrefixed];
+            }
+        }
+        
+        // 3. Try plain domain (dev builds)
+        if (![candidates containsObject:@"eu.opencloud.desktop"]) {
+            [candidates addObject:@"eu.opencloud.desktop"];
+        }
+        
+        // Find first working App Group
+        for (NSString *candidate in candidates) {
+            NSLog(@"FinderSync: Trying App Group: %@", candidate);
+            NSURL *tryContainer = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:candidate];
+            if (tryContainer) {
+                container = tryContainer;
+                socketPath = [container URLByAppendingPathComponent:@".socket" isDirectory:NO];
+                NSLog(@"FinderSync: Found valid App Group: %@ -> %@", candidate, container.path);
+                break;
+            }
+        }
+        
+        if (!container) {
+            NSLog(@"FinderSync: ERROR - No valid App Group found from candidates: %@", [candidates componentsJoinedByString:@", "]);
+        }
 
         NSLog(@"FinderSync: Socket path: %@", socketPath.path);
 
@@ -185,6 +225,36 @@
     NSString *command = [[_menuItems objectAtIndex:idx] valueForKey:@"command"];
     NSString *paths = [self selectedPathsSeparatedByRecordSeparator];
     [self.localSocketClient askOnSocket:paths query:command];
+}
+
+#pragma mark - Helper methods
+
+/// Get team identifier from code signing information
+- (NSString *)getTeamIdentifierFromSigning
+{
+    SecStaticCodeRef staticCode = NULL;
+    NSURL *bundleURL = [[NSBundle bundleForClass:[self class]] bundleURL];
+    
+    OSStatus status = SecStaticCodeCreateWithPath((__bridge CFURLRef)bundleURL, kSecCSDefaultFlags, &staticCode);
+    if (status != errSecSuccess || !staticCode) {
+        return nil;
+    }
+    
+    CFDictionaryRef signingInfo = NULL;
+    status = SecCodeCopySigningInformation(staticCode, kSecCSSigningInformation, &signingInfo);
+    CFRelease(staticCode);
+    
+    if (status != errSecSuccess || !signingInfo) {
+        return nil;
+    }
+    
+    NSString *teamId = nil;
+    CFStringRef teamIdentifier = CFDictionaryGetValue(signingInfo, kSecCodeInfoTeamIdentifier);
+    if (teamIdentifier) {
+        teamId = (__bridge NSString *)teamIdentifier;
+    }
+    CFRelease(signingInfo);
+    return teamId;
 }
 
 #pragma mark - SyncClientDelegate implementation

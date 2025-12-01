@@ -62,25 +62,93 @@ import UniformTypeIdentifiers
     
     // Socket client for communication with main app
     lazy var socketClient: LocalSocketClient? = {
-        guard let containerUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) else {
-            logger.error("Cannot get container URL for app group: \(self.appGroupIdentifier)")
+        guard let containerUrl = self.containerURL else {
+            logger.error("Cannot get container URL for any app group")
             return nil
         }
         
-        let socketPath = containerUrl.appendingPathComponent(".fileprovidersocket").path
+        // Use .socket to match FinderSyncExt (main app creates socket here)
+        let socketPath = containerUrl.appendingPathComponent(".socket").path
         let lineProcessor = FileProviderSocketLineProcessor(delegate: self)
         return LocalSocketClient(socketPath: socketPath, lineProcessor: lineProcessor)
     }()
     
-    // App group identifier - must match the main app's app group
+    // Cached app group identifier (resolved dynamically)
+    private lazy var _resolvedAppGroupIdentifier: String? = {
+        return Self.resolveAppGroupIdentifier()
+    }()
+    
+    // App group identifier - dynamically resolved
     var appGroupIdentifier: String {
-        // Read from Info.plist or use default
-        return Bundle.main.object(forInfoDictionaryKey: "AppGroupIdentifier") as? String ?? "group.eu.opencloud.desktop"
+        return _resolvedAppGroupIdentifier ?? "eu.opencloud.desktop"
     }
     
-    // Container URL for extension storage
+    // Container URL for extension storage (resolved dynamically)
     private var containerURL: URL? {
-        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
+        guard let appGroup = _resolvedAppGroupIdentifier else { return nil }
+        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
+    }
+    
+    /// Dynamically resolve the correct App Group identifier.
+    /// Tries multiple possible identifiers to support both dev and signed builds.
+    private static func resolveAppGroupIdentifier() -> String? {
+        let baseDomain = "eu.opencloud.desktop"
+        
+        // Build list of possible App Group IDs to try
+        var candidates: [String] = []
+        
+        // 1. Try Info.plist configured value first
+        if let plistValue = Bundle.main.object(forInfoDictionaryKey: "AppGroupIdentifier") as? String,
+           !plistValue.isEmpty {
+            candidates.append(plistValue)
+        }
+        
+        // 2. Try with team ID from entitlements
+        if let teamId = getTeamIdentifierFromEntitlements() {
+            let teamPrefixed = "\(teamId).\(baseDomain)"
+            if !candidates.contains(teamPrefixed) {
+                candidates.append(teamPrefixed)
+            }
+        }
+        
+        // 3. Try plain domain (dev builds)
+        if !candidates.contains(baseDomain) {
+            candidates.append(baseDomain)
+        }
+        
+        // 4. Try legacy group prefix
+        let groupPrefixed = "group.\(baseDomain)"
+        if !candidates.contains(groupPrefixed) {
+            candidates.append(groupPrefixed)
+        }
+        
+        // Find first working App Group
+        for candidate in candidates {
+            NSLog("[FileProviderExt] Trying App Group: %@", candidate)
+            if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: candidate) {
+                NSLog("[FileProviderExt] Found valid App Group: %@ -> %@", candidate, container.path)
+                return candidate
+            }
+        }
+        
+        NSLog("[FileProviderExt] ERROR: No valid App Group found from candidates: %@", candidates.joined(separator: ", "))
+        return nil
+    }
+    
+    /// Extract team identifier from the app's entitlements
+    private static func getTeamIdentifierFromEntitlements() -> String? {
+        // Try to read from entitlements via Security framework
+        guard let bundleURL = Bundle.main.bundleURL as CFURL? else { return nil }
+        
+        var staticCode: SecStaticCode?
+        let status = SecStaticCodeCreateWithPath(bundleURL, [], &staticCode)
+        guard status == errSecSuccess, let code = staticCode else { return nil }
+        
+        var info: CFDictionary?
+        let infoStatus = SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info)
+        guard infoStatus == errSecSuccess, let signingInfo = info as? [String: Any] else { return nil }
+        
+        return signingInfo[kSecCodeInfoTeamIdentifier as String] as? String
     }
     
     // MARK: - Initialization
