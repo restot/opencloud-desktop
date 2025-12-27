@@ -64,7 +64,7 @@
 - Domain auto-registers on startup (`FileProviderDomainManager`) and appears at `~/Library/CloudStorage/desktopclient-OpenCloud/`
 - XPC service discovery working via NSFileProviderServicing protocol
 - Main app sends OAuth access token (1283 chars) to extension via XPC
-- Extension is sandboxed with correct App Group (S6P3V9X548.eu.opencloud.desktop)
+- Extension is sandboxed with correct App Group (<APPLE_TEAM_ID>.eu.opencloud.desktop)
 - Enumeration returns demo items (needs WebDAV wiring)
 - `fetchContents` ready for WebDAV integration
 - macOS 26 compatibility: required `NSFileProviderReplicatedExtension` methods implemented; `NSExtensionFileProviderSupportsEnumeration` set
