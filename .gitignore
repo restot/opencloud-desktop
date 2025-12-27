@@ -27,6 +27,7 @@ t1.cfg
 *.user
 *.sln.docstates
 .drone-secrets.env
+.env
 
 # Build results
 [Dd]ebug/
@@ -178,3 +179,4 @@ FakesAssemblies/
 test/gui/config.ini
 test/gui/reports
 */**/__pycache__/
+tools/crash_reports/
