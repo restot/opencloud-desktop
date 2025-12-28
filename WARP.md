@@ -10,7 +10,7 @@ OpenCloud Desktop is a Qt-based C++ desktop synchronization client for OpenCloud
 - **Language**: C++20
 - **Build System**: CMake 3.18+ with KDE ECM (Extra CMake Modules)
 - **Database**: SQLite3
-- **Version**: 3.1.1 (see VERSION.cmake)
+- **Version**: 3.1.6 (see VERSION.cmake)
 
 ## Build System & Development Commands
 
@@ -29,12 +29,21 @@ mkdir -p ~/craft/CraftMaster
 git clone --depth=1 https://invent.kde.org/kde/craftmaster.git ~/craft/CraftMaster/CraftMaster
 ```
 
+#### Environment Setup
+
+Before running any Craft commands, set these environment variables once in your shell session:
+
+```bash
+export CRAFT_TARGET=macos-clang-arm64
+export MAKEFLAGS="-j$(sysctl -n hw.ncpu)"
+export CMAKE_BUILD_PARALLEL_LEVEL=$(sysctl -n hw.ncpu)
+```
+
+You only need to run these exports once per shell session. All subsequent build commands will use these settings.
+
 #### Initial Craft Setup
 
 ```bash
-# Set target architecture (use macos-clang-arm64 for Apple Silicon, macos-clang-x86_64 for Intel)
-export CRAFT_TARGET=macos-clang-arm64
-
 # Initialize Craft
 pwsh .github/workflows/.craft.ps1 --setup
 
@@ -49,8 +58,6 @@ pwsh .github/workflows/.craft.ps1 -c --install-deps opencloud/opencloud-desktop
 #### Building the Application
 
 ```bash
-export CRAFT_TARGET=macos-clang-arm64
-
 # Point Craft to your local source directory
 pwsh .github/workflows/.craft.ps1 -c --set "srcDir=$(pwd)" opencloud/opencloud-desktop
 
@@ -58,8 +65,6 @@ pwsh .github/workflows/.craft.ps1 -c --set "srcDir=$(pwd)" opencloud/opencloud-d
 pwsh .github/workflows/.craft.ps1 -c --set 'args=-DWITH_CRASHREPORTER=ON -DCRASHREPORTER_SUBMIT_URL=http://localhost:8080/submit -DBUILD_TESTING=ON -DBUILD_SHELL_INTEGRATION=ON' opencloud/opencloud-desktop
 
 # Build with max parallelism
-export MAKEFLAGS="-j$(sysctl -n hw.ncpu)"
-export CMAKE_BUILD_PARALLEL_LEVEL=$(sysctl -n hw.ncpu)
 pwsh .github/workflows/.craft.ps1 -c --no-cache opencloud/opencloud-desktop
 ```
 
@@ -73,15 +78,62 @@ open ~/Documents/craft/macos-clang-arm64/Applications/KDE/OpenCloud.app
 #### Running Tests
 
 ```bash
-export CRAFT_TARGET=macos-clang-arm64
 pwsh .github/workflows/.craft.ps1 -c --no-cache --test opencloud/opencloud-desktop
 ```
 
 #### Rebuilding After Changes
 
 ```bash
-export CRAFT_TARGET=macos-clang-arm64
 pwsh .github/workflows/.craft.ps1 -c --no-cache opencloud/opencloud-desktop
+```
+
+#### Clean Rebuild (Force Full Rebuild)
+
+If Craft thinks the package is up-to-date and `--no-cache` isn't triggering a rebuild, delete the build directory and rebuild:
+
+```bash
+# Delete the build directory
+rm -rf ~/Documents/craft/macos-clang-arm64/build/opencloud/opencloud-desktop/work/build
+
+# Force configure, compile, and install
+pwsh .github/workflows/.craft.ps1 -c --configure --compile --install opencloud/opencloud-desktop
+```
+
+Alternatively, for a complete reset:
+
+```bash
+# Delete the entire package work directory
+rm -rf ~/Documents/craft/macos-clang-arm64/build/opencloud/opencloud-desktop
+
+# Rebuild from scratch
+pwsh .github/workflows/.craft.ps1 -c opencloud/opencloud-desktop
+```
+
+#### Max Performance Build (Recommended)
+
+With environment variables already set, you can use these faster build options:
+
+```bash
+# Full rebuild with max parallelism
+pwsh .github/workflows/.craft.ps1 -c --no-cache opencloud/opencloud-desktop
+
+# Or compile only (faster for incremental builds)
+pwsh .github/workflows/.craft.ps1 -c --compile opencloud/opencloud-desktop
+
+# Then install
+pwsh .github/workflows/.craft.ps1 -c --install opencloud/opencloud-desktop
+```
+
+**Flags explained:**
+- `MAKEFLAGS="-j$(sysctl -n hw.ncpu)"` - Parallel make jobs (uses all CPU cores)
+- `CMAKE_BUILD_PARALLEL_LEVEL` - Ninja/CMake parallel build level
+- `--compile` - Only compile, skip configure if already done (faster for code changes)
+- `--install` - Install to final location after compile
+
+**Filtering build output:**
+```bash
+# Show only errors and build status (useful for long builds)
+pwsh .github/workflows/.craft.ps1 -c opencloud/opencloud-desktop 2>&1 | rg "error:|BUILD"
 ```
 
 ### Alternative: Plain CMake (Advanced)
@@ -117,7 +169,11 @@ qmlformat -i <file.qml>
 # C++ formatting (requires clang-format)
 clang-format -i <file.cpp>
 
-# The project has pre-commit hooks for formatting (requires ECM 5.79+)
+# Format staged changes before commit (project enforces this via pre-commit hook)
+git clang-format --staged --extensions 'cpp,h,hpp,c'
+
+# Preview formatting changes
+git clang-format --staged --extensions 'cpp,h,hpp,c' --diff
 ```
 
 ### Build Options

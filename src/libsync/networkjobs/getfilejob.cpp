@@ -46,10 +46,6 @@ void GETFileJob::start()
         req.setRawHeader(it.key(), it.value());
     }
 
-    if (_bandwidthManager) {
-        // probably a qt bug, with http2 we might handle the input too slow causing the whole file to be buffered by qt in ram
-        req.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
-    }
     sendRequest("GET", req);
 
     qCDebug(lcGetJob) << _bandwidthManager << _bandwidthChoked << _bandwidthLimited;
@@ -69,15 +65,12 @@ void GETFileJob::finished()
         slotReadyRead();
         Q_ASSERT(!reply()->bytesAvailable());
     }
-    // ensure the device is closed in case the underlying file is modified in a signal connected to finished()
-    _device->close();
 }
 
 void GETFileJob::newReplyHook(QNetworkReply *reply)
 {
-    if (_bandwidthManager) {
-        reply->setReadBufferSize(16 * 1024); // keep low so we can easier limit the bandwidth
-    }
+    reply->setReadBufferSize(16 * 1024); // keep low so we can easier limit the bandwidth
+
     connect(reply, &QNetworkReply::metaDataChanged, this, &GETFileJob::slotMetaDataChanged);
     connect(reply, &QNetworkReply::finished, this, &GETFileJob::slotReadyRead);
     connect(reply, &QNetworkReply::downloadProgress, this, &GETFileJob::downloadProgress);
@@ -87,9 +80,7 @@ void GETFileJob::slotMetaDataChanged()
 {
     // For some reason setting the read buffer in GETFileJob::start doesn't seem to go
     // through the HTTP layer thread(?)
-    if (_bandwidthManager) {
-        reply()->setReadBufferSize(16 * 1024);
-    }
+    reply()->setReadBufferSize(16 * 1024);
 
     int httpStatus = reply()->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
@@ -107,9 +98,7 @@ void GETFileJob::slotMetaDataChanged()
     if (httpStatus / 100 != 2) {
         // Disable the buffer limit, as we don't limit the bandwidth for error messages.
         // (We are only going to do a readAll() at the end.)
-        if (_bandwidthManager) {
-            reply()->setReadBufferSize(0);
-        }
+        reply()->setReadBufferSize(0);
         return;
     }
     if (reply()->error() != QNetworkReply::NoError) {
@@ -233,7 +222,7 @@ void GETFileJob::slotReadyRead()
         if (_bandwidthLimited) {
             toRead = std::min<qint64>(bufferSize, _bandwidthQuota);
             if (toRead == 0) {
-                qCWarning(lcGetJob) << u"Out of bandwidth quota";
+                qCWarning(lcGetJob) << u"Out of badnwidth quota";
                 break;
             }
             _bandwidthQuota -= toRead;

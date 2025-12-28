@@ -1202,22 +1202,22 @@ Please consider removing this folder from the account and adding it again.</sour
         <translation>Время ожидания соединения истекло</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="122"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="111"/>
         <source>No E-Tag received from server, check Proxy/Gateway</source>
         <translation>От сервера не пришел E-Tag, проверьте Proxy/Gateway</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="128"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="117"/>
         <source>We received a different E-Tag for resuming. Retrying next time.</source>
         <translation>Мы получили другой E-Tag для возобновления. Попробуем в следующий раз.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="138"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="127"/>
         <source>We received an unexpected download Content-Length.</source>
         <translation>Мы получили неожиданное значение Content-Length загрузки.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="166"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="155"/>
         <source>Server returned wrong content-range</source>
         <translation>Сервер вернул неправильный content-range</translation>
     </message>
@@ -2554,12 +2554,12 @@ Note that using any logging command line options will override the settings.</so
         <translation>Не удается открыть или создать локальную базу данных синхронизации. Убедитесь, что у вас есть доступ к папке синхронизации.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="770"/>
+        <location filename="../src/libsync/syncengine.cpp" line="773"/>
         <source>Disk space is low: Downloads that would reduce free space below %1 were skipped.</source>
         <translation>Недостаточно места на диске: были пропущены загрузки, которые привели бы к сокращению свободного места до значения ниже %1.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="777"/>
+        <location filename="../src/libsync/syncengine.cpp" line="780"/>
         <source>Space quota exceeded. Please contact the Administrator of this space.</source>
         <translation>Превышена квота для Пространства. Пожалуйста, обратитесь к Администратору этого пространства.</translation>
     </message>
@@ -2584,7 +2584,7 @@ Note that using any logging command line options will override the settings.</so
         <translation>Не удалось открыть журнал синхронизации</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="753"/>
+        <location filename="../src/libsync/syncengine.cpp" line="756"/>
         <source>Aborted due to: %1</source>
         <translation>Прервано из-за: %1</translation>
     </message>
