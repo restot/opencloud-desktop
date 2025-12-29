@@ -615,6 +615,8 @@ func deleteDirectoryAndSubdirectories(ocId: String) throws {
 
 **Verification**: ⚠️ PARTIALLY VERIFIED by Haiku - The recursive deletion algorithm is confirmed to perform O(N) DELETE queries. The approach is inefficient but safe. Would benefit from optimization but not a blocking issue.
 
+verified by glm
+
 ---
 
 ### 16. LOW: Missing Cancellation Support
