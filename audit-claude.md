@@ -655,6 +655,8 @@ func fetchContents(...) -> Progress {
 
 **Verification**: ⚠️ NEEDS REVIEW by Haiku - Cancellation support in fetchContents needs verification in actual implementation. The issue is valid in principle but depends on how the downloadFile method is implemented.
 
+needs verification by glm
+
 ---
 
 ### 17. LOW: Synchronous Database Lookup Missing in Enumerator Init
@@ -692,6 +694,8 @@ init(enumeratedItemIdentifier: NSFileProviderItemIdentifier, domain: NSFileProvi
 
 **Verification**: ✅ VERIFIED by Haiku - Confirmed in FileProviderEnumerator.swift:40-52. The serverPath is set to empty string for non-root items with a TODO comment. This is a critical gap preventing subdirectory enumeration from working.
 
+verified by glm
+
 ---
 
 ### 18. LOW: Hardcoded WebDAV Path
@@ -722,6 +726,8 @@ let davPath = "/remote.php/webdav"
 
 **Verification**: ✅ VERIFIED by Haiku - Confirmed in FileProviderExtension.swift:564-566. WebDAV path is hardcoded to "/remote.php/webdav" without discovery or fallback. This limits interoperability with non-standard server configurations.
 
+verified by glm
+
 ---
 
 ### 19. LOW: Sync Time Always Uses Current Date
@@ -748,6 +754,8 @@ self.syncTime = Date()
 - Document syncTime semantics clearly
 
 **Verification**: ⚠️ PARTIALLY VERIFIED by Haiku - The issue is confirmed - syncTime is set to `Date()` at initialization. This doesn't track actual server sync time, but the impact is relatively minor since the main issue is that it should reflect when the metadata was last validated against the server.
+
+verified by glm
 
 ---
 
