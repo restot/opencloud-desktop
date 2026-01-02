@@ -1191,22 +1191,22 @@ Please consider removing this folder from the account and adding it again.</sour
         <translation>Timeout för anslutning</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="122"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="111"/>
         <source>No E-Tag received from server, check Proxy/Gateway</source>
         <translation>Ingen E-Tag mottagen från servern, kontrollera proxy/gateway</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="128"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="117"/>
         <source>We received a different E-Tag for resuming. Retrying next time.</source>
         <translation>Vi fick en annan E-Tag för att återuppta. Försöker igen nästa gång.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="138"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="127"/>
         <source>We received an unexpected download Content-Length.</source>
         <translation>Vi fick en oväntad nedladdning av Content-Length.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="166"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="155"/>
         <source>Server returned wrong content-range</source>
         <translation>Servern returnerade fel innehållsintervall</translation>
     </message>
@@ -2536,12 +2536,12 @@ Note that using any logging command line options will override the settings.</so
         <translation>Det går inte att öppna eller skapa den lokala synkroniseringsdatabasen. Kontrollera att du har skrivbehörighet i synkroniseringsmappen.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="770"/>
+        <location filename="../src/libsync/syncengine.cpp" line="773"/>
         <source>Disk space is low: Downloads that would reduce free space below %1 were skipped.</source>
         <translation>Diskutrymmet är lågt: Nedladdningar som skulle minska ledigt utrymme under %1 har hoppats över.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="777"/>
+        <location filename="../src/libsync/syncengine.cpp" line="780"/>
         <source>Space quota exceeded. Please contact the Administrator of this space.</source>
         <translation>Arbetsytan är full. Kontakta administratören för denna arbetsyta.</translation>
     </message>
@@ -2566,7 +2566,7 @@ Note that using any logging command line options will override the settings.</so
         <translation>Det går inte att öppna synkroniseringsjournalen</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="753"/>
+        <location filename="../src/libsync/syncengine.cpp" line="756"/>
         <source>Aborted due to: %1</source>
         <translation>Avbruten på grund av: %1</translation>
     </message>

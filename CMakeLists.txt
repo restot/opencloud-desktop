@@ -107,9 +107,9 @@ option(WITH_EXTERNAL_BRANDING "A URL to an external branding repo" "")
 set(VIRTUAL_FILE_SYSTEM_PLUGINS off cfapi CACHE STRING "Name of internal plugin in src/libsync/vfs or the locations of virtual file plugins")
 
 if(APPLE)
-  set( SOCKETAPI_TEAM_IDENTIFIER_PREFIX "" CACHE STRING "SocketApi prefix (including a following dot) that must match the codesign key's TeamIdentifier/Organizational Unit" )
+  # Default SOCKETAPI_TEAM_IDENTIFIER_PREFIX from environment if present, otherwise empty.
+  set(SOCKETAPI_TEAM_IDENTIFIER_PREFIX "$ENV{SOCKETAPI_TEAM_IDENTIFIER_PREFIX}" CACHE STRING "SocketApi prefix (including a following dot) that must match the codesign key's TeamIdentifier/Organizational Unit")
 endif()
-
 
 if (WITH_AUTO_UPDATER)
     if(APPLE)
