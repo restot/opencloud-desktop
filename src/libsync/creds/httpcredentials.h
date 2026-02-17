@@ -59,6 +59,9 @@ public:
     void invalidateToken() override;
     void forgetSensitiveData() override;
 
+    /// Returns the current OAuth access token
+    QString accessToken() const { return _accessToken; }
+
     /* If we still have a valid refresh token, try to refresh it assynchronously and Q_EMIT fetched()
      * otherwise return false
      */

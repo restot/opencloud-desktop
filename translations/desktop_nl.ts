@@ -1202,22 +1202,22 @@ Overweeg om deze map uit het account te verwijderen en deze opnieuw toe te voege
         <translation>Verbinding is verlopen</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="122"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="111"/>
         <source>No E-Tag received from server, check Proxy/Gateway</source>
         <translation>Geen E-Tag ontvangen van de server, controleer Proxy/Gateway</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="128"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="117"/>
         <source>We received a different E-Tag for resuming. Retrying next time.</source>
         <translation>Andere E-Tag voor hervatting ontvangen. Volgende keer opnieuw proberen.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="138"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="127"/>
         <source>We received an unexpected download Content-Length.</source>
         <translation>Onverwachte download Content-Length ontvangen.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="166"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="155"/>
         <source>Server returned wrong content-range</source>
         <translation>Server gaf onjuiste content-range terug</translation>
     </message>
@@ -2553,12 +2553,12 @@ Note that using any logging command line options will override the settings.</so
         <translation>Kan de lokale synchronisatie-database niet openen of aanmaken. Zorg ervoor dat je schrijfrechten hebt in de synchronisatiemap.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="770"/>
+        <location filename="../src/libsync/syncengine.cpp" line="773"/>
         <source>Disk space is low: Downloads that would reduce free space below %1 were skipped.</source>
         <translation>Schijfruimte is beperkt: Downloads die de vrije ruimte onder %1 brengen, zijn overgeslagen.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="777"/>
+        <location filename="../src/libsync/syncengine.cpp" line="780"/>
         <source>Space quota exceeded. Please contact the Administrator of this space.</source>
         <translation>Quota van ruimte overschreden. Neem contact op met de beheerder van deze ruimte.</translation>
     </message>
@@ -2583,7 +2583,7 @@ Note that using any logging command line options will override the settings.</so
         <translation>Kan het synchronisatielogboek niet openen</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="753"/>
+        <location filename="../src/libsync/syncengine.cpp" line="756"/>
         <source>Aborted due to: %1</source>
         <translation>Afgebroken vanwege: %1</translation>
     </message>

@@ -1202,22 +1202,22 @@ Bitte entferne diesen Ordner vom Account und lege ihn erneut an.</translation>
         <translation>Zeitüberschreitung der Verbindung</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="122"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="111"/>
         <source>No E-Tag received from server, check Proxy/Gateway</source>
         <translation>Kein E-Tag vom Server empfangen, überprüfe Proxy/Gateway</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="128"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="117"/>
         <source>We received a different E-Tag for resuming. Retrying next time.</source>
         <translation>Wir haben ein anderen E-Tag für die Wiederaufnahme erhalten. Beim nächsten Mal wird es wieder versucht.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="138"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="127"/>
         <source>We received an unexpected download Content-Length.</source>
         <translation>Wir haben eine unerwartete Download-Inhaltlänge empfangen.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="166"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="155"/>
         <source>Server returned wrong content-range</source>
         <translation>Server gab falschen Inhaltsbereich zurück</translation>
     </message>
@@ -2554,12 +2554,12 @@ Beachten Sie, dass Kommandozeilenoptionen zum Logging diese Einstellungen übers
         <translation>Die lokale Sync-Datenbank kann nicht geöffnet oder erstellt werden. Stell sicher, dass Schreibzugriff auf den Sync-Ordner vorliegt.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="770"/>
+        <location filename="../src/libsync/syncengine.cpp" line="773"/>
         <source>Disk space is low: Downloads that would reduce free space below %1 were skipped.</source>
         <translation>Der Speicherplatz ist knapp: Downloads, die den freien Speicherplatz unter %1 reduzieren würden, wurden übersprungen.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="777"/>
+        <location filename="../src/libsync/syncengine.cpp" line="780"/>
         <source>Space quota exceeded. Please contact the Administrator of this space.</source>
         <translation>Space-Kontingent überschritten. Bitte wende dich an den Administrator dieses Space.</translation>
     </message>
@@ -2584,7 +2584,7 @@ Beachten Sie, dass Kommandozeilenoptionen zum Logging diese Einstellungen übers
         <translation>Synchronisationsbericht kann nicht geöffnet werden</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="753"/>
+        <location filename="../src/libsync/syncengine.cpp" line="756"/>
         <source>Aborted due to: %1</source>
         <translation>Abgebrochen: %1</translation>
     </message>
@@ -3024,7 +3024,7 @@ Beachten Sie, dass Kommandozeilenoptionen zum Logging diese Einstellungen übers
     <message>
         <location filename="../src/gui/newwizard/pages/serverurlsetupwizardpage.ui" line="59"/>
         <source>Welcome</source>
-        <translation>Willkommen</translation>
+        <translation>Wilkommen</translation>
     </message>
     <message>
         <location filename="../src/gui/newwizard/pages/serverurlsetupwizardpage.ui" line="85"/>
@@ -3056,7 +3056,7 @@ Beachten Sie, dass Kommandozeilenoptionen zum Logging diese Einstellungen übers
     <message>
         <location filename="../src/gui/newwizard/enums.cpp" line="32"/>
         <source>Welcome</source>
-        <translation>Willkommen</translation>
+        <translation>Wilkommen</translation>
     </message>
     <message>
         <location filename="../src/gui/newwizard/enums.cpp" line="35"/>

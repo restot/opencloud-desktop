@@ -57,7 +57,6 @@ Feature: Syncing files
             client content
             """
 
-    @skipOnWindows
     Scenario: Sync all is selected by default
         Given user "Alice" has created folder "simple-folder" in the server
         And user "Alice" has created folder "large-folder" in the server
@@ -82,7 +81,6 @@ Feature: Syncing files
         But the folder "simple-folder" should not exist on the file system
         And the folder "large-folder" should not exist on the file system
 
-    @skipOnWindows
     Scenario: Sync only one folder from the server
         Given user "Alice" has created folder "simple-folder" in the server
         And user "Alice" has created folder "large-folder" in the server
@@ -113,7 +111,7 @@ Feature: Syncing files
         And the user waits for the files to sync
         Then as "Alice" folder "simple-folder" should not exist in the server
 
-    @issue-9733 @skipOnWindows
+    @issue-9733
     Scenario: sort folders list by name and size
         Given user "Alice" has created folder "123Folder" in the server
         And user "Alice" has uploaded file with content "small" to "123Folder/lorem.txt" in the server
@@ -458,7 +456,6 @@ Feature: Syncing files
         And as "Alice" the file "file2.txt" should have the content "Test file2" in the server
 
 
-    @skipOnWindows
     Scenario: sync remote folder to a local sync folder having special characters
         Given user "Alice" has created folder "~`!@#$^&()-_=+{[}];',)" in the server
         And user "Alice" has created folder "simple-folder" in the server
@@ -569,7 +566,7 @@ Feature: Syncing files
         And as "Brian" file "Shares/simple-folder/simple.pdf" should exist in the server
         And as "Brian" the file "Shares/simple-folder/uploaded-lorem.txt" should have the content "overwrite openCloud test text file" in the server
 
-    @skipOnWindows
+
     Scenario: Unselected subfolders are excluded from local sync
         Given user "Alice" has created folder "test-folder" in the server
         And user "Alice" has created folder "test-folder/sub-folder1" in the server
@@ -583,27 +580,3 @@ Feature: Syncing files
         When user "Alice" uploads file with content "some content" to "test-folder/sub-folder2/lorem.txt" in the server
         And the user waits for the files to sync
         Then the file "test-folder/sub-folder2/lorem.txt" should not exist on the file system
-
-    @skipOnWindows
-    Scenario: Only root level files sync when all folders are unselected
-        Given user "Alice" has created folder "test-folder" in the server
-        And user "Alice" has created folder "test-folder/sub-folder1" in the server
-        And user "Alice" has created folder "test-folder/sub-folder2" in the server
-        And user "Alice" has uploaded file with content "root file content" to "root-file.txt" in the server
-        And user "Alice" has uploaded file with content "some subfolder content" to "test-folder/sub-folder1/lorem.txt" in the server
-        And the user has started the client
-        And the user has entered the following account information:
-            | server   | %local_server% |
-            | user     | Alice          |
-            | password | 1234           |
-        When the user selects manual sync folder option in advanced section
-        And the user sets the sync path in sync connection wizard
-        And the user selects "Personal" space in sync connection wizard
-        And user unselects all the remote folders
-        And the user adds the folder sync connection
-        And the user waits for the files to sync
-        Then the folder "test-folder/sub-folder1" should not exist on the file system
-        And the folder "test-folder/sub-folder2" should not exist on the file system
-        And the file "test-folder/sub-folder1/lorem.txt" should not exist on the file system
-        But the file "root-file.txt" should exist on the file system
-

@@ -136,6 +136,16 @@
                </widget>
               </item>
               <item>
+               <widget class="QPushButton" name="finderExtensionButton">
+                <property name="text">
+                 <string>Finder Integration...</string>
+                </property>
+                <property name="toolTip">
+                 <string>Configure Finder overlay icons and context menu integration</string>
+                </property>
+               </widget>
+              </item>
+              <item>
                <spacer name="spacer_3">
                 <property name="orientation">
                  <enum>Qt::Orientation::Horizontal</enum>

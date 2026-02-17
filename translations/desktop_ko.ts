@@ -1203,22 +1203,22 @@ Please consider removing this folder from the account and adding it again.</sour
         <translation>연결 시간 초과</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="122"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="111"/>
         <source>No E-Tag received from server, check Proxy/Gateway</source>
         <translation>서버에서 E-Tag를 받지 못했습니다. 프록시/게이트웨이를 확인하십시오.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="128"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="117"/>
         <source>We received a different E-Tag for resuming. Retrying next time.</source>
         <translation>이어받기를 위한 다른 E-Tag를 받았습니다. 다음에 다시 시도합니다.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="138"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="127"/>
         <source>We received an unexpected download Content-Length.</source>
         <translation>예상치 못한 다운로드 Content-Length를 받았습니다.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="166"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="155"/>
         <source>Server returned wrong content-range</source>
         <translation>서버가 잘못된 content-range를 반환했습니다</translation>
     </message>
@@ -2558,12 +2558,12 @@ Note that using any logging command line options will override the settings.</so
         <translation>로컬 동기화 데이터베이스를 열거나 생성할 수 없습니다. 동기화 폴더에 쓰기 권한이 있는지 확인하십시오.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="770"/>
+        <location filename="../src/libsync/syncengine.cpp" line="773"/>
         <source>Disk space is low: Downloads that would reduce free space below %1 were skipped.</source>
         <translation>디스크 공간 부족: 여유 공간이 %1 미만으로 줄어드는 다운로드는 건너뛰었습니다.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="777"/>
+        <location filename="../src/libsync/syncengine.cpp" line="780"/>
         <source>Space quota exceeded. Please contact the Administrator of this space.</source>
         <translation>스페이스 할당량을 초과했습니다. 이 스페이스의 관리자에게 문의하십시오.</translation>
     </message>
@@ -2588,7 +2588,7 @@ Note that using any logging command line options will override the settings.</so
         <translation>동기화 저널을 열 수 없습니다</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="753"/>
+        <location filename="../src/libsync/syncengine.cpp" line="756"/>
         <source>Aborted due to: %1</source>
         <translation>다음 이유로 중단됨: %1</translation>
     </message>

@@ -1202,22 +1202,22 @@ Veuillez envisager de supprimer ce dossier du compte et de l&apos;ajouter à nou
         <translation>Délai de connexion dépassé</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="122"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="111"/>
         <source>No E-Tag received from server, check Proxy/Gateway</source>
         <translation>Aucun E-Tag reçu du serveur, vérifiez le proxy/passerelle</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="128"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="117"/>
         <source>We received a different E-Tag for resuming. Retrying next time.</source>
         <translation>Nous avons reçu un E-Tag différent lors de la reprise. Une nouvelle tentative sera effectuée lors du prochain essai.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="138"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="127"/>
         <source>We received an unexpected download Content-Length.</source>
         <translation>Nous avons reçu une longueur de contenu de téléchargement inattendue.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="166"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="155"/>
         <source>Server returned wrong content-range</source>
         <translation>Le serveur a renvoyé une plage de contenu incorrecte</translation>
     </message>
@@ -2553,12 +2553,12 @@ Notez que l&apos;utilisation de n&apos;importe quelle option de ligne de command
         <translation>Impossible d&apos;ouvrir ou de créer la base de données de synchronisation locale. Assurez-vous d&apos;avoir un accès en écriture dans le dossier sync.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="770"/>
+        <location filename="../src/libsync/syncengine.cpp" line="773"/>
         <source>Disk space is low: Downloads that would reduce free space below %1 were skipped.</source>
         <translation>L&apos;espace disque est faible : Les téléchargements susceptibles de réduire l&apos;espace libre en dessous de %1 ont été ignorés.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="777"/>
+        <location filename="../src/libsync/syncengine.cpp" line="780"/>
         <source>Space quota exceeded. Please contact the Administrator of this space.</source>
         <translation>Le quota d&apos;Espace est dépassé. Veuillez contacter l&apos;administrateur de cet Espace.</translation>
     </message>
@@ -2583,7 +2583,7 @@ Notez que l&apos;utilisation de n&apos;importe quelle option de ligne de command
         <translation>Impossible d’ouvrir le journal de synchronisation</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="753"/>
+        <location filename="../src/libsync/syncengine.cpp" line="756"/>
         <source>Aborted due to: %1</source>
         <translation>Annulé en raison de : %1</translation>
     </message>
