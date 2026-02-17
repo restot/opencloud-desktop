@@ -157,6 +157,12 @@ IF( APPLE )
     set_source_files_properties(guiutility_mac.mm PROPERTIES COMPILE_DEFINITIONS SOCKETAPI_TEAM_IDENTIFIER_PREFIX="${SOCKETAPI_TEAM_IDENTIFIER_PREFIX}")
     # Enable ARC for socketapisocket_mac.mm as it uses __weak references in XPC handlers
     set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/socketapi/socketapisocket_mac.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    # Enable ARC for FileProvider integration files
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/macOS/fileproviderdomainmanager_mac.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/macOS/fileprovider_mac.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/macOS/fileproviderxpc_mac.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     # Add include path for ClientCommunicationProtocol.h from extension
     target_include_directories(OpenCloudGui PRIVATE
         ${CMAKE_SOURCE_DIR}/shell_integration/MacOSX/OpenCloudFinderExtension/FileProviderExt/Services

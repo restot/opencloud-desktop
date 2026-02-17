@@ -60,7 +60,7 @@ FileProviderXPC::~FileProviderXPC()
     // Release retained Objective-C objects
     for (auto it = _clientCommServices.begin(); it != _clientCommServices.end(); ++it) {
         if (it.value()) {
-            [(NSObject *)it.value() release];
+            (void)(__bridge_transfer id)it.value();
         }
     }
     _clientCommServices.clear();
@@ -145,8 +145,7 @@ void FileProviderXPC::connectToFileProviderDomains()
                                         if (!idError && extDomainId) {
                                             QString qDomainId = QString::fromNSString(extDomainId);
                                             NSLog(@"OpenCloud XPC: Connected to domain via URL: %s", qDomainId.toUtf8().constData());
-                                            [(NSObject *)proxy retain];
-                                            _clientCommServices.insert(qDomainId, (void *)proxy);
+                                            _clientCommServices.insert(qDomainId, (__bridge_retained void *)proxy);
                                         }
                                         dispatch_group_leave(group);
                                     }];
@@ -225,12 +224,11 @@ void FileProviderXPC::connectToFileProviderDomains()
                                         dispatch_group_leave(group);
                                         return;
                                     }
-                                    
+
                                     QString qDomainId = QString::fromNSString(extDomainId);
                                     qCInfo(lcFileProviderXPC) << "Connected to domain:" << qDomainId;
-                                    
-                                    [(NSObject *)proxy retain];
-                                    _clientCommServices.insert(qDomainId, (void *)proxy);
+
+                                    _clientCommServices.insert(qDomainId, (__bridge_retained void *)proxy);
                                     dispatch_group_leave(group);
                                 }];
                             } else {
@@ -281,8 +279,7 @@ void FileProviderXPC::connectToFileProviderDomains()
                                     [proxy getFileProviderDomainIdentifierWithCompletionHandler:^(NSString *extDomainId, NSError *idError) {
                                         if (!idError && extDomainId) {
                                             QString qDomainId = QString::fromNSString(extDomainId);
-                                            [(NSObject *)proxy retain];
-                                            _clientCommServices.insert(qDomainId, (void *)proxy);
+                                            _clientCommServices.insert(qDomainId, (__bridge_retained void *)proxy);
                                         }
                                         dispatch_group_leave(group);
                                     }];
@@ -487,7 +484,7 @@ void FileProviderXPC::reconnectAfterInvalidation()
     // Clear stale connections
     for (auto it = _clientCommServices.begin(); it != _clientCommServices.end(); ++it) {
         if (it.value()) {
-            [(NSObject *)it.value() release];
+            (void)(__bridge_transfer id)it.value();
         }
     }
     _clientCommServices.clear();

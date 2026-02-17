@@ -54,12 +54,6 @@ public:
     MacImplementation() = default;
     ~MacImplementation()
     {
-        // Release all retained domains
-        for (auto *domain : _registeredDomains.values()) {
-            if (domain) {
-                [domain release];
-            }
-        }
         _registeredDomains.clear();
     }
 
@@ -104,7 +98,6 @@ public:
                     qCInfo(lcFileProviderDomainManager) << "Found existing domain for account:"
                                                         << accountState->account()->davDisplayName()
                                                         << "domainId:" << domainId;
-                    [domain retain];
                     _registeredDomains.insert(domainId, domain);
                     
                     // Reconnect the domain
@@ -182,7 +175,6 @@ public:
                 NSLog(@"[FPDomainManager] Error adding domain: %@", error);
                 qCWarning(lcFileProviderDomainManager) << "Error adding domain:" << domainId
                                                        << QString::fromNSString(error.localizedDescription);
-                [domain release];
                 return;
             }
 
@@ -226,7 +218,6 @@ public:
             } else {
                 qCInfo(lcFileProviderDomainManager) << "Successfully removed domain:" << domainId;
             }
-            [domain release];
         }];
     }
 
@@ -319,13 +310,8 @@ public:
             }
 
             dispatch_group_wait(removeGroup, DISPATCH_TIME_FOREVER);
-            
+
             // Clear our internal state
-            for (auto *domain : _registeredDomains.values()) {
-                if (domain) {
-                    [domain release];
-                }
-            }
             _registeredDomains.clear();
 
             dispatch_group_leave(group);
