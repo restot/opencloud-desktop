@@ -20,20 +20,49 @@ import UniformTypeIdentifiers
 /// This extension provides on-demand file sync capabilities for OpenCloud on macOS.
 /// Also implements NSFileProviderServicing to expose XPC services.
 @objc class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, NSFileProviderServicing {
-    
+
     let domain: NSFileProviderDomain
     let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "eu.opencloud.desktop.FileProviderExt", category: "FileProviderExtension")
-    
-    // Account information received from main app
-    var serverUrl: String?
-    var username: String?
-    var userId: String?
-    var password: String?
-    var isAuthenticated: Bool = false
-    
-    // WebDAV client for server communication
-    private(set) var webdavClient: WebDAVClient?
-    
+
+    // MARK: - Shared Credential Store
+    // The system may create multiple extension instances in the same process.
+    // Credentials are shared across all instances so that any instance can
+    // serve requests immediately after XPC auth arrives on any one of them.
+    // Also persisted to UserDefaults for cross-restart availability.
+
+    private static var _sharedWebDAVClient: WebDAVClient?
+    private static var _sharedIsAuthenticated = false
+    private static var _sharedServerUrl: String?
+    private static var _sharedUsername: String?
+    private static var _sharedUserId: String?
+    private static var _sharedPassword: String?
+
+    // Instance accessors that delegate to shared state
+    var serverUrl: String? {
+        get { Self._sharedServerUrl }
+        set { Self._sharedServerUrl = newValue }
+    }
+    var username: String? {
+        get { Self._sharedUsername }
+        set { Self._sharedUsername = newValue }
+    }
+    var userId: String? {
+        get { Self._sharedUserId }
+        set { Self._sharedUserId = newValue }
+    }
+    var password: String? {
+        get { Self._sharedPassword }
+        set { Self._sharedPassword = newValue }
+    }
+    var isAuthenticated: Bool {
+        get { Self._sharedIsAuthenticated }
+        set { Self._sharedIsAuthenticated = newValue }
+    }
+    var webdavClient: WebDAVClient? {
+        get { Self._sharedWebDAVClient }
+        set { Self._sharedWebDAVClient = newValue }
+    }
+
     // Item database for caching
     private(set) var database: ItemDatabase?
     
@@ -156,12 +185,18 @@ import UniformTypeIdentifiers
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
         super.init()
-        
+
         logger.info("Initializing FileProviderExtension for domain: \(domain.identifier.rawValue)")
-        
+
         // Initialize database
         setupDatabase()
-        
+
+        // Restore credentials from UserDefaults if not already authenticated
+        // (handles process restart and additional extension instances)
+        if !Self._sharedIsAuthenticated {
+            restoreCredentials()
+        }
+
         // Start socket connection to main app
         socketClient?.start()
     }
@@ -183,16 +218,121 @@ import UniformTypeIdentifiers
     func invalidate() {
         logger.info("FileProviderExtension invalidated for domain: \(self.domain.identifier.rawValue)")
         socketClient?.closeConnection()
-        webdavClient = nil
+        // Don't nil out shared webdavClient on invalidate — other instances may need it
     }
-    
+
+    // MARK: - Credential Persistence
+
+    private static let credKeyUser = "fp_credential_user"
+    private static let credKeyUserId = "fp_credential_userId"
+    private static let credKeyServer = "fp_credential_server"
+    private static let credKeyPassword = "fp_credential_password"
+    private static let credKeyDavPath = "fp_credential_davPath"
+
+    /// Save credentials to UserDefaults in the shared container for cross-restart persistence
+    private func persistCredentials(user: String, userId: String, serverUrl: String, password: String, davPath: String) {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
+        defaults.set(user, forKey: Self.credKeyUser)
+        defaults.set(userId, forKey: Self.credKeyUserId)
+        defaults.set(serverUrl, forKey: Self.credKeyServer)
+        defaults.set(password, forKey: Self.credKeyPassword)
+        defaults.set(davPath, forKey: Self.credKeyDavPath)
+        defaults.synchronize()
+        NSLog("[FileProviderExt] Credentials persisted to UserDefaults")
+    }
+
+    /// Restore credentials from UserDefaults and set up WebDAV client
+    private func restoreCredentials() {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
+        guard let user = defaults.string(forKey: Self.credKeyUser),
+              let userId = defaults.string(forKey: Self.credKeyUserId),
+              let serverUrl = defaults.string(forKey: Self.credKeyServer),
+              let password = defaults.string(forKey: Self.credKeyPassword),
+              !password.isEmpty else {
+            return
+        }
+        let davPath = defaults.string(forKey: Self.credKeyDavPath) ?? ""
+
+        NSLog("[FileProviderExt] Restoring credentials from UserDefaults for user=%@", user)
+        setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath)
+    }
+
+    /// Clear persisted credentials
+    private func clearPersistedCredentials() {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
+        defaults.removeObject(forKey: Self.credKeyUser)
+        defaults.removeObject(forKey: Self.credKeyUserId)
+        defaults.removeObject(forKey: Self.credKeyServer)
+        defaults.removeObject(forKey: Self.credKeyPassword)
+        defaults.removeObject(forKey: Self.credKeyDavPath)
+        defaults.synchronize()
+    }
+
+    // MARK: - On-Demand Item Resolution
+
+    /// Try to resolve an item that isn't in our database by decoding its identifier
+    /// (base64-encoded path) and fetching metadata from the server via PROPFIND.
+    private func resolveItemFromServer(identifier: NSFileProviderItemIdentifier, webdav: WebDAVClient, database: ItemDatabase) async -> ItemMetadata? {
+        // Our identifiers are base64url-encoded remote paths (from generateIdentifier)
+        let raw = identifier.rawValue
+            .replacingOccurrences(of: "_", with: "/")
+            .replacingOccurrences(of: "-", with: "+")
+        // Pad to multiple of 4
+        let padded = raw + String(repeating: "=", count: (4 - raw.count % 4) % 4)
+
+        guard let data = Data(base64Encoded: padded),
+              let remotePath = String(data: data, encoding: .utf8),
+              !remotePath.isEmpty else {
+            return nil
+        }
+
+        logger.info("Resolving item from server: \(remotePath)")
+
+        do {
+            let items = try await webdav.listDirectory(path: remotePath)
+            guard let serverItem = items.first else { return nil }
+
+            // Determine parent by trimming the last path component
+            let parentPath: String
+            let normalizedPath = remotePath.hasSuffix("/") ? String(remotePath.dropLast()) : remotePath
+            if let lastSlash = normalizedPath.lastIndex(of: "/") {
+                parentPath = String(normalizedPath[..<lastSlash])
+            } else {
+                parentPath = "/"
+            }
+
+            // Find parent in DB, or use root
+            let parentOcId: String
+            if let parentMeta = await database.itemMetadata(remotePath: parentPath) {
+                parentOcId = parentMeta.ocId
+            } else if let parentMeta = await database.itemMetadata(remotePath: parentPath + "/") {
+                parentOcId = parentMeta.ocId
+            } else {
+                parentOcId = ItemDatabase.rootContainerId
+            }
+
+            var metadata = ItemMetadata(from: serverItem, parentOcId: parentOcId)
+            // Preserve download state if it exists
+            if let existing = await database.itemMetadata(ocId: metadata.ocId) {
+                metadata.isDownloaded = existing.isDownloaded
+                metadata.isDownloading = existing.isDownloading
+                metadata.status = existing.status
+            }
+            try await database.addItemMetadata(metadata)
+            return metadata
+        } catch {
+            logger.error("Failed to resolve item from server: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     // MARK: - NSFileProviderReplicatedExtension Protocol
-    
+
     func item(for identifier: NSFileProviderItemIdentifier, request: NSFileProviderRequest, completionHandler: @escaping (NSFileProviderItem?, Error?) -> Void) -> Progress {
         logger.debug("Requesting item for identifier: \(identifier.rawValue)")
-        
+
         let progress = Progress(totalUnitCount: 1)
-        
+
         // Handle special containers
         switch identifier {
         case .rootContainer:
@@ -206,15 +346,22 @@ import UniformTypeIdentifiers
         default:
             break
         }
-        
+
         // Look up in database
         Task {
             guard let database = self.database else {
                 completionHandler(nil, NSFileProviderError(.notAuthenticated))
                 return
             }
-            
-            if let metadata = await database.itemMetadata(ocId: identifier.rawValue) {
+
+            var metadata = await database.itemMetadata(ocId: identifier.rawValue)
+
+            // If not in DB, try to resolve from server
+            if metadata == nil, let webdav = self.webdavClient {
+                metadata = await resolveItemFromServer(identifier: identifier, webdav: webdav, database: database)
+            }
+
+            if let metadata = metadata {
                 // Determine parent identifier
                 let parentId: NSFileProviderItemIdentifier
                 if metadata.parentOcId == ItemDatabase.rootContainerId || metadata.parentOcId.isEmpty {
@@ -222,7 +369,7 @@ import UniformTypeIdentifiers
                 } else {
                     parentId = NSFileProviderItemIdentifier(metadata.parentOcId)
                 }
-                
+
                 let item = FileProviderItem(metadata: metadata, parentItemIdentifier: parentId)
                 completionHandler(item, nil)
             } else {
@@ -230,63 +377,143 @@ import UniformTypeIdentifiers
             }
             progress.completedUnitCount = 1
         }
-        
+
         return progress
     }
     
+    /// Maximum number of auth retries for a single operation
+    private static let maxAuthRetries = 1
+
     func fetchContents(for itemIdentifier: NSFileProviderItemIdentifier, version requestedVersion: NSFileProviderItemVersion?, request: NSFileProviderRequest, completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void) -> Progress {
         logger.info("Fetching contents for item: \(itemIdentifier.rawValue)")
-        
+
         let progress = Progress(totalUnitCount: 100)
-        
+
         Task {
             guard let webdav = self.webdavClient, let database = self.database else {
                 logger.error("WebDAV client or database not available")
                 completionHandler(nil, nil, NSFileProviderError(.notAuthenticated))
                 return
             }
-            
-            // Look up item metadata
-            guard let metadata = await database.itemMetadata(ocId: itemIdentifier.rawValue) else {
+
+            // Look up item metadata, resolving from server if not in DB
+            var metadata = await database.itemMetadata(ocId: itemIdentifier.rawValue)
+            if metadata == nil {
+                metadata = await resolveItemFromServer(identifier: itemIdentifier, webdav: webdav, database: database)
+            }
+            guard let metadata = metadata else {
                 logger.error("Item not found: \(itemIdentifier.rawValue)")
                 completionHandler(nil, nil, NSError.fileProviderErrorForNonExistentItem(withIdentifier: itemIdentifier))
                 return
             }
-            
+
             // Mark as downloading
             try? await database.setStatus(ocId: metadata.ocId, status: .downloading)
-            
+
             do {
-                // Create temp file path
+                // Use unique temp file per download to avoid collisions
                 let tempDir = FileManager.default.temporaryDirectory
-                let tempFile = tempDir.appendingPathComponent(metadata.ocId).appendingPathExtension(metadata.filename.components(separatedBy: ".").last ?? "")
-                
+                let ext = (metadata.filename as NSString).pathExtension
+                let tempFile = tempDir.appendingPathComponent(UUID().uuidString + (ext.isEmpty ? "" : ".\(ext)"))
+
                 // Download via WebDAV
+                NSLog("[FetchContents] Starting download to: %@", tempFile.path)
                 try await webdav.downloadFile(remotePath: metadata.remotePath, to: tempFile, progress: progress)
-                
-                // Mark as downloaded
+                NSLog("[FetchContents] Download completed")
+
+                // Verify file has content and update size in database
+                let attrs = try? FileManager.default.attributesOfItem(atPath: tempFile.path)
+                let fileSize = attrs?[.size] as? Int64 ?? 0
+                NSLog("[FetchContents] Downloaded %lld bytes, metadata.size=%lld, etag=%@", fileSize, metadata.size, metadata.etag)
+
+                // Mark as downloaded, update size, and reset status
                 try await database.setDownloaded(ocId: metadata.ocId, downloaded: true)
-                
-                // Get updated metadata and create item
-                if let updatedMetadata = await database.itemMetadata(ocId: metadata.ocId) {
-                    let parentId = updatedMetadata.parentOcId == ItemDatabase.rootContainerId 
-                        ? NSFileProviderItemIdentifier.rootContainer 
-                        : NSFileProviderItemIdentifier(updatedMetadata.parentOcId)
-                    let item = FileProviderItem(metadata: updatedMetadata, parentItemIdentifier: parentId)
-                    
-                    progress.completedUnitCount = 100
-                    completionHandler(tempFile, item, nil)
-                    
-                    // Signal parent container to refresh item's appearance in Finder
-                    self.signalEnumerator(for: parentId)
-                } else {
-                    completionHandler(tempFile, nil, nil)
+                if fileSize > 0 {
+                    try await database.updateSize(ocId: metadata.ocId, size: fileSize)
                 }
-                
+                try await database.setStatus(ocId: metadata.ocId, status: .normal)
+
+                // Build item directly with correct size (don't re-read from DB to avoid stale data)
+                var updatedMetadata = metadata
+                updatedMetadata.isDownloaded = true
+                updatedMetadata.isDownloading = false
+                updatedMetadata.status = .normal
+                if fileSize > 0 {
+                    updatedMetadata.size = fileSize
+                }
+
+                let parentId = updatedMetadata.parentOcId == ItemDatabase.rootContainerId
+                    ? NSFileProviderItemIdentifier.rootContainer
+                    : NSFileProviderItemIdentifier(updatedMetadata.parentOcId)
+                let item = FileProviderItem(metadata: updatedMetadata, parentItemIdentifier: parentId)
+                NSLog("[FetchContents] Done: file=%@, diskSize=%lld, itemSize=%@, isDownloaded=%d", metadata.filename, fileSize, item.documentSize ?? NSNumber(value: -1), item.isDownloaded)
+
+                progress.completedUnitCount = 100
+                completionHandler(tempFile, item, nil)
+
+                // Signal enumerators to refresh item's appearance in Finder
+                self.signalEnumerator(for: parentId)
+                self.signalEnumerator(for: .workingSet)
+
             } catch {
+                NSLog("[FetchContents] ERROR: %@", error.localizedDescription)
                 logger.error("Download failed: \(error.localizedDescription)")
+
+                // On 401, invalidate auth and wait for the main app to re-send credentials
+                if let webdavError = error as? WebDAVError, case .notAuthenticated = webdavError {
+                    self.logger.warning("Token expired, marking as unauthenticated and waiting for refresh")
+                    self.isAuthenticated = false
+
+                    // Wait for main app to push fresh credentials via XPC
+                    let waitStart = Date()
+                    while !self.isAuthenticated {
+                        if Date().timeIntervalSince(waitStart) > 30 {
+                            break
+                        }
+                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+                    }
+
+                    if self.isAuthenticated, let freshWebdav = self.webdavClient {
+                        self.logger.info("Re-authenticated, retrying download")
+                        do {
+                            let tempDir = FileManager.default.temporaryDirectory
+                            let ext = (metadata.filename as NSString).pathExtension
+                            let retryFile = tempDir.appendingPathComponent(UUID().uuidString + (ext.isEmpty ? "" : ".\(ext)"))
+                            try await freshWebdav.downloadFile(remotePath: metadata.remotePath, to: retryFile, progress: progress)
+
+                            let attrs = try? FileManager.default.attributesOfItem(atPath: retryFile.path)
+                            let fileSize = attrs?[.size] as? Int64 ?? 0
+
+                            try await database.setDownloaded(ocId: metadata.ocId, downloaded: true)
+                            if fileSize > 0 {
+                                try await database.updateSize(ocId: metadata.ocId, size: fileSize)
+                            }
+                            try await database.setStatus(ocId: metadata.ocId, status: .normal)
+
+                            var updatedMetadata = metadata
+                            updatedMetadata.isDownloaded = true
+                            updatedMetadata.isDownloading = false
+                            updatedMetadata.status = .normal
+                            if fileSize > 0 { updatedMetadata.size = fileSize }
+
+                            let parentId = updatedMetadata.parentOcId == ItemDatabase.rootContainerId
+                                ? NSFileProviderItemIdentifier.rootContainer
+                                : NSFileProviderItemIdentifier(updatedMetadata.parentOcId)
+                            let item = FileProviderItem(metadata: updatedMetadata, parentItemIdentifier: parentId)
+
+                            progress.completedUnitCount = 100
+                            completionHandler(retryFile, item, nil)
+                            self.signalEnumerator(for: parentId)
+                            self.signalEnumerator(for: .workingSet)
+                            return
+                        } catch {
+                            self.logger.error("Retry download also failed: \(error.localizedDescription)")
+                        }
+                    }
+                }
+
                 try? await database.setStatus(ocId: metadata.ocId, status: .downloadError, error: error.localizedDescription)
-                
+
                 let nsError: Error
                 if let webdavError = error as? WebDAVError {
                     switch webdavError {
@@ -305,21 +532,36 @@ import UniformTypeIdentifiers
                 completionHandler(nil, nil, nsError)
             }
         }
-        
+
         return progress
     }
     
     func createItem(basedOn itemTemplate: NSFileProviderItem, fields: NSFileProviderItemFields, contents url: URL?, options: NSFileProviderCreateItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
         logger.info("Creating item: \(itemTemplate.filename)")
-        
+
         let progress = Progress(totalUnitCount: 100)
-        
+
         Task {
+            // Wait for authentication if not yet ready
+            let startTime = Date()
+            while self.webdavClient == nil || !self.isAuthenticated {
+                if Date().timeIntervalSince(startTime) > 15 {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+
             guard let webdav = self.webdavClient, let database = self.database else {
                 completionHandler(itemTemplate, [], false, NSFileProviderError(.notAuthenticated))
                 return
             }
-            
+
+            // Start security-scoped access for content URL
+            let accessingContent = url?.startAccessingSecurityScopedResource() ?? false
+            defer {
+                if accessingContent { url?.stopAccessingSecurityScopedResource() }
+            }
+
             do {
                 // Determine parent path
                 let parentPath: String
@@ -330,72 +572,146 @@ import UniformTypeIdentifiers
                 } else {
                     throw NSFileProviderError(.noSuchItem)
                 }
-                
-                let remotePath = parentPath.hasSuffix("/") 
-                    ? parentPath + itemTemplate.filename 
+
+                let remotePath = parentPath.hasSuffix("/")
+                    ? parentPath + itemTemplate.filename
                     : parentPath + "/" + itemTemplate.filename
-                
-                let createdItem: WebDAVItem?
-                
-                if itemTemplate.contentType == .folder {
-                    // Create directory
-                    createdItem = try await webdav.createDirectory(at: remotePath)
+
+                var createdItem: WebDAVItem?
+
+                // When reimportItems triggers createItem, mayAlreadyExist is set.
+                // In that case, just fetch existing metadata from the server instead
+                // of uploading (which would overwrite server content with stale/empty data).
+                if options.contains(.mayAlreadyExist) {
+                    NSLog("[CreateItem] mayAlreadyExist: fetching existing metadata for %@", remotePath)
+                    let items = try await webdav.listDirectory(path: remotePath)
+                    createdItem = items.first
+                } else if itemTemplate.contentType == .folder {
+                    do {
+                        createdItem = try await webdav.createDirectory(at: remotePath)
+                    } catch let error as WebDAVError {
+                        // 405 = directory already exists — fetch existing metadata instead
+                        if case .httpError(let code, _) = error, code == 405 {
+                            NSLog("[CreateItem] Directory already exists at %@, fetching metadata", remotePath)
+                            let items = try await webdav.listDirectory(path: remotePath)
+                            createdItem = items.first
+                        } else {
+                            throw error
+                        }
+                    }
                 } else if let localURL = url {
-                    // Upload file
+                    logger.info("Uploading file: \(localURL.path) -> \(remotePath)")
                     createdItem = try await webdav.uploadFile(from: localURL, to: remotePath, progress: progress)
                 } else {
-                    throw NSFileProviderError(.cannotSynchronize)
+                    // Create empty file via PUT with empty data
+                    createdItem = try await webdav.uploadFile(from: URL(fileURLWithPath: "/dev/null"), to: remotePath, progress: progress)
                 }
-                
+
                 guard let webdavItem = createdItem else {
                     throw NSFileProviderError(.cannotSynchronize)
                 }
-                
+
                 // Store in database
-                let parentOcId = itemTemplate.parentItemIdentifier == .rootContainer 
-                    ? ItemDatabase.rootContainerId 
+                let parentOcId = itemTemplate.parentItemIdentifier == .rootContainer
+                    ? ItemDatabase.rootContainerId
                     : itemTemplate.parentItemIdentifier.rawValue
                 var metadata = ItemMetadata(from: webdavItem, parentOcId: parentOcId)
                 metadata.isUploaded = true
-                metadata.isDownloaded = url != nil  // If we had local content, it's downloaded
+                metadata.isDownloaded = url != nil
                 try await database.addItemMetadata(metadata)
-                
+
                 let item = FileProviderItem(metadata: metadata, parentItemIdentifier: itemTemplate.parentItemIdentifier)
                 progress.completedUnitCount = 100
                 completionHandler(item, [], false, nil)
-                
+
+                // Signal parent to refresh
+                self.signalEnumerator(for: itemTemplate.parentItemIdentifier)
+
             } catch {
                 logger.error("Create failed: \(error.localizedDescription)")
-                completionHandler(itemTemplate, [], false, error)
+                let nsError: Error
+                if let webdavError = error as? WebDAVError {
+                    switch webdavError {
+                    case .notAuthenticated:
+                        nsError = NSFileProviderError(.notAuthenticated)
+                    case .fileNotFound:
+                        nsError = NSError.fileProviderErrorForNonExistentItem(withIdentifier: itemTemplate.itemIdentifier)
+                    default:
+                        nsError = NSFileProviderError(.cannotSynchronize)
+                    }
+                } else if error is NSFileProviderError {
+                    nsError = error
+                } else {
+                    nsError = NSFileProviderError(.cannotSynchronize)
+                }
+                completionHandler(itemTemplate, [], false, nsError)
             }
         }
-        
+
         return progress
     }
     
     func modifyItem(_ item: NSFileProviderItem, baseVersion: NSFileProviderItemVersion, changedFields: NSFileProviderItemFields, contents newContents: URL?, options: NSFileProviderModifyItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
         logger.info("Modifying item: \(item.filename), fields: \(changedFields.rawValue)")
-        
+
         let progress = Progress(totalUnitCount: 100)
-        
+
         Task {
             guard let webdav = self.webdavClient, let database = self.database else {
                 completionHandler(item, [], false, NSFileProviderError(.notAuthenticated))
                 return
             }
-            
+
             guard var metadata = await database.itemMetadata(ocId: item.itemIdentifier.rawValue) else {
                 completionHandler(item, [], false, NSError.fileProviderErrorForNonExistentItem(withIdentifier: item.itemIdentifier))
                 return
             }
-            
+
+            // Start security-scoped access for content URL
+            let accessingContent = newContents?.startAccessingSecurityScopedResource() ?? false
+            defer {
+                if accessingContent { newContents?.stopAccessingSecurityScopedResource() }
+            }
+
             do {
                 // Handle content changes (upload new content)
-                if let newContents = newContents {
-                    let _ = try await webdav.uploadFile(from: newContents, to: metadata.remotePath, progress: progress)
-                    metadata.isUploaded = true
+                if let newContents = newContents, changedFields.contains(.contents) {
+                    // Skip re-upload if item was just downloaded and content matches
+                    // (system calls modifyItem after fetchContents to acknowledge materialization)
+                    let shouldUpload: Bool
+                    if metadata.isDownloaded {
+                        let localSize = (try? FileManager.default.attributesOfItem(atPath: newContents.path))?[.size] as? Int64 ?? -1
+                        shouldUpload = localSize != metadata.size
+                        if !shouldUpload {
+                            self.logger.info("Skipping re-upload for just-downloaded item: \(item.filename)")
+                        }
+                    } else {
+                        shouldUpload = true
+                    }
+
+                    if shouldUpload {
+                        do {
+                            let etag = metadata.etag.isEmpty ? nil : metadata.etag
+                            if let updatedItem = try await webdav.uploadFile(from: newContents, to: metadata.remotePath, ifMatchEtag: etag, progress: progress) {
+                                metadata = ItemMetadata(from: updatedItem, parentOcId: metadata.parentOcId)
+                            }
+                            metadata.isUploaded = true
+                            metadata.isDownloaded = true
+                        } catch WebDAVError.conflict {
+                            self.logger.warning("Conflict detected for \(item.filename): server version changed")
+                            if let serverItems = try? await webdav.listDirectory(path: metadata.remotePath),
+                               let serverItem = serverItems.first {
+                                var serverMetadata = ItemMetadata(from: serverItem, parentOcId: metadata.parentOcId)
+                                serverMetadata.isDownloaded = false
+                                try await database.addItemMetadata(serverMetadata)
+                            }
+                            self.signalEnumerator()
+                            completionHandler(item, [], false, NSFileProviderError(.cannotSynchronize))
+                            return
+                        }
+                    }
                 }
-                
+
                 // Handle rename
                 if changedFields.contains(.filename), item.filename != metadata.filename {
                     let newPath = metadata.parentPath + "/" + item.filename
@@ -403,12 +719,12 @@ import UniformTypeIdentifiers
                         metadata = ItemMetadata(from: movedItem, parentOcId: metadata.parentOcId)
                     }
                 }
-                
+
                 // Handle move to different parent
                 if changedFields.contains(.parentItemIdentifier) {
                     let newParentPath: String
                     let newParentOcId: String
-                    
+
                     if item.parentItemIdentifier == .rootContainer {
                         newParentPath = "/"
                         newParentOcId = ItemDatabase.rootContainerId
@@ -418,29 +734,34 @@ import UniformTypeIdentifiers
                     } else {
                         throw NSFileProviderError(.noSuchItem)
                     }
-                    
-                    let newPath = newParentPath.hasSuffix("/") 
-                        ? newParentPath + metadata.filename 
+
+                    let newPath = newParentPath.hasSuffix("/")
+                        ? newParentPath + metadata.filename
                         : newParentPath + "/" + metadata.filename
-                    
+
                     if let movedItem = try await webdav.moveItem(from: metadata.remotePath, to: newPath) {
                         metadata = ItemMetadata(from: movedItem, parentOcId: newParentOcId)
                     }
                 }
-                
+
                 // Update database
                 try await database.addItemMetadata(metadata)
-                
+
+                // Fields we don't handle — return them as still pending so the
+                // system doesn't keep calling modifyItem for unhandled metadata.
+                let handledFields: NSFileProviderItemFields = [.contents, .filename, .parentItemIdentifier]
+                let stillPending = changedFields.subtracting(handledFields)
+
                 let updatedItem = FileProviderItem(metadata: metadata, parentItemIdentifier: item.parentItemIdentifier)
                 progress.completedUnitCount = 100
-                completionHandler(updatedItem, [], false, nil)
-                
+                completionHandler(updatedItem, stillPending, false, nil)
+
             } catch {
                 logger.error("Modify failed: \(error.localizedDescription)")
                 completionHandler(item, [], false, error)
             }
         }
-        
+
         return progress
     }
     
@@ -512,23 +833,19 @@ import UniformTypeIdentifiers
     /// This happens when items are downloaded or evicted (by user or system).
     func materializedItemsDidChange(completionHandler: @escaping () -> Void) {
         logger.info("Materialized items did change - syncing database")
-        
+
         guard let manager = NSFileProviderManager(for: domain), let database = database else {
             completionHandler()
             return
         }
-        
-        // Enumerate materialized items to sync our database
-        Task {
-            do {
-                let enumerator = try manager.enumeratorForMaterializedItems()
-                // For now just log - full sync would compare with DB
-                self.logger.debug("Materialized items enumerator obtained")
-            } catch {
-                self.logger.error("Failed to get materialized items enumerator: \(error.localizedDescription)")
-            }
+
+        // Enumerate materialized items and sync isDownloaded state in our DB
+        let materializedEnumerator = manager.enumeratorForMaterializedItems()
+        let observer = MaterializedEnumerationObserver(database: database, logger: logger) {
             completionHandler()
         }
+        let startPage = NSFileProviderPage(NSFileProviderPage.initialPageSortedByName as Data)
+        materializedEnumerator.enumerateItems(for: observer, startingAt: startPage)
     }
     
     /// Called when pending items change (items waiting to be uploaded/downloaded)
@@ -545,52 +862,81 @@ import UniformTypeIdentifiers
     }
     
     /// Called by ClientCommunicationService when main app sends account credentials
-    func setupDomainAccount(user: String, userId: String, serverUrl: String, password: String) {
-        NSLog("[FileProviderExt] setupDomainAccount: user=%@, server=%@, password=%d chars", user, serverUrl, password.count)
-        logger.info("Setting up account for user: \(user) at server: \(serverUrl)")
-        
+    func setupDomainAccount(user: String, userId: String, serverUrl: String, password: String, davPath: String = "") {
+        NSLog("[FileProviderExt] setupDomainAccount: user=%@, server=%@, password=%d chars, davPath=%@", user, serverUrl, password.count, davPath)
+        logger.info("Setting up account for user: \(user) at server: \(serverUrl) davPath: \(davPath)")
+
+        guard !password.isEmpty else {
+            NSLog("[FileProviderExt] Ignoring account configuration with empty password")
+            logger.warning("Received empty password, ignoring account configuration")
+            return
+        }
+
         self.username = user
         self.userId = userId
         self.serverUrl = serverUrl
         self.password = password
-        
+
         // Create WebDAV client
         guard let url = URL(string: serverUrl) else {
             NSLog("[FileProviderExt] ERROR: Invalid server URL: %@", serverUrl)
             logger.error("Invalid server URL: \(serverUrl)")
             return
         }
-        
-        // Determine WebDAV path - OpenCloud typically uses /remote.php/webdav or /dav/files/<user>
-        // For now, use the standard path
-        let davPath = "/remote.php/webdav"
-        
+
+        // Use the davPath provided by the main app, fall back to legacy path
+        let resolvedDavPath = davPath.isEmpty ? "/remote.php/webdav" : davPath
+
         // Determine auth type: OAuth tokens are typically longer than regular passwords
         // and don't contain special characters like passwords might
         let useBearer = password.count > 100 || password.hasPrefix("ey")  // JWT tokens start with "ey"
-        
-        NSLog("[FileProviderExt] Creating WebDAV client: url=%@, davPath=%@, useBearer=%d", url.absoluteString, davPath, useBearer)
-        self.webdavClient = WebDAVClient(serverURL: url, davPath: davPath, username: user, password: password, useBearer: useBearer)
+
+        NSLog("[FileProviderExt] Creating WebDAV client: url=%@, davPath=%@, useBearer=%d", url.absoluteString, resolvedDavPath, useBearer)
+        self.webdavClient = WebDAVClient(serverURL: url, davPath: resolvedDavPath, username: user, password: password, useBearer: useBearer)
         self.isAuthenticated = true
-        
+
         NSLog("[FileProviderExt] WebDAV client created, isAuthenticated=true")
-        logger.info("WebDAV client created for \(url.absoluteString)")
-        
+        logger.info("WebDAV client created for \(url.absoluteString)\(resolvedDavPath)")
+
+        // Persist for cross-restart and cross-instance availability
+        persistCredentials(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: resolvedDavPath)
+
         // Signal that we're ready to enumerate with real data
         signalEnumerator()
+
+        // Force the system to re-enumerate everything from scratch.
+        // After extension restart, the system uses stale cached state and only
+        // calls enumerateChanges (not enumerateItems) for known containers.
+        // reimportItems invalidates that cache so subfolders get re-enumerated.
+        if let manager = NSFileProviderManager(for: domain) {
+            Task {
+                // Small delay to let the domain fully initialize
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                do {
+                    try await manager.reimportItems(below: .rootContainer)
+                    NSLog("[FileProviderExt] reimportItems(below: .rootContainer) succeeded")
+                } catch let error as NSError {
+                    NSLog("[FileProviderExt] reimportItems failed: domain=%@ code=%d desc=%@",
+                          error.domain, error.code, error.localizedDescription)
+                    // Fallback: signal all enumerators to at least refresh root
+                    self.signalEnumerator()
+                }
+            }
+        }
     }
     
     /// Called by ClientCommunicationService when main app removes account
     func removeAccountConfig() {
         logger.info("Removing account configuration")
-        
+
         self.username = nil
         self.userId = nil
         self.serverUrl = nil
         self.password = nil
         self.webdavClient = nil
         self.isAuthenticated = false
-        
+        clearPersistedCredentials()
+
         // Clear database
         Task {
             try? await database?.clearAll()
@@ -658,5 +1004,49 @@ import UniformTypeIdentifiers
                 }
             }
         }
+    }
+}
+
+// MARK: - MaterializedEnumerationObserver
+
+/// Observer that collects materialized item identifiers and syncs the DB isDownloaded state.
+private class MaterializedEnumerationObserver: NSObject, NSFileProviderEnumerationObserver {
+    private let database: ItemDatabase
+    private let logger: Logger
+    private let completionHandler: () -> Void
+    private var materializedIds = Set<String>()
+
+    init(database: ItemDatabase, logger: Logger, completionHandler: @escaping () -> Void) {
+        self.database = database
+        self.logger = logger
+        self.completionHandler = completionHandler
+    }
+
+    func didEnumerate(_ updatedPage: [any NSFileProviderItemProtocol]) {
+        for item in updatedPage {
+            materializedIds.insert(item.itemIdentifier.rawValue)
+        }
+    }
+
+    func finishEnumerating(upTo nextPage: NSFileProviderPage?) {
+        Task {
+            // Mark items as downloaded if materialized, not downloaded if evicted
+            let allDownloaded = await database.downloadedItems()
+            for item in allDownloaded {
+                if !materializedIds.contains(item.ocId) {
+                    try? await database.setDownloaded(ocId: item.ocId, downloaded: false)
+                }
+            }
+            for ocId in materializedIds {
+                try? await database.setDownloaded(ocId: ocId, downloaded: true)
+            }
+            logger.info("Materialized items sync complete: \(self.materializedIds.count) materialized")
+            completionHandler()
+        }
+    }
+
+    func finishEnumeratingWithError(_ error: Error) {
+        logger.error("Materialized items enumeration failed: \(error.localizedDescription)")
+        completionHandler()
     }
 }

@@ -6,6 +6,14 @@ include(VERSION.cmake)
 project(OpenCloudDesktop LANGUAGES CXX C VERSION ${MIRALL_VERSION_MAJOR}.${MIRALL_VERSION_MINOR}.${MIRALL_VERSION_PATCH})
 include(FeatureSummary)
 
+if(APPLE)
+    set(CMAKE_MACOSX_RPATH ON)
+    set(CMAKE_SKIP_BUILD_RPATH FALSE)
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+    set(CMAKE_INSTALL_RPATH "@executable_path/../Frameworks")
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
+endif()
+
 find_package(ECM 6.0.0 REQUIRED NO_MODULE)
 
 set_package_properties(ECM PROPERTIES TYPE REQUIRED DESCRIPTION "Extra CMake Modules." URL "https://projects.kde.org/projects/kdesupport/extra-cmake-modules")

@@ -57,26 +57,27 @@ class FileProviderSocketLineProcessor: NSObject, LineProcessor {
             
         case "ACCOUNT_DETAILS":
             // Received account details from main app
-            // Format: ACCOUNT_DETAILS:userAgent~user~userId~serverUrl~password
+            // Format: ACCOUNT_DETAILS:userAgent~user~userId~serverUrl~password[~davPath]
             guard let detailsSubsequence = splitLine.last else {
                 logger.error("Account details missing content")
                 return
             }
-            
-            let details = detailsSubsequence.split(separator: "~", maxSplits: 4)
+
+            let details = detailsSubsequence.split(separator: "~", maxSplits: 5)
             guard details.count >= 5 else {
-                logger.error("Account details has wrong format, expected 5 parts, got \(details.count)")
+                logger.error("Account details has wrong format, expected 5+ parts, got \(details.count)")
                 return
             }
-            
+
             let _ = String(details[0]) // userAgent - reserved for future use
             let user = String(details[1])
             let userId = String(details[2])
             let serverUrl = String(details[3])
             let password = String(details[4])
-            
+            let davPath = details.count >= 6 ? String(details[5]) : ""
+
             logger.info("Setting up account for user: \(user)")
-            delegate?.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password)
+            delegate?.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath)
             
         case "IGNORE_LIST":
             // Received ignore list patterns from main app

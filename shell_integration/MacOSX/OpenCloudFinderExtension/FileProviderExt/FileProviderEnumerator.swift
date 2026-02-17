@@ -127,9 +127,14 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             return try await enumerateDirectory(path: "/", parentOcId: ItemDatabase.rootContainerId, webdav: webdav, database: database)
             
         case .workingSet:
-            // Working set: return items that have been visited/downloaded
-            // For now, just return root items
-            return try await enumerateDirectory(path: "/", parentOcId: ItemDatabase.rootContainerId, webdav: webdav, database: database)
+            // Working set: return items the user has interacted with (downloaded)
+            let downloadedMetadata = await database.downloadedItems()
+            return downloadedMetadata.map { metadata in
+                let parentId = metadata.parentOcId == ItemDatabase.rootContainerId
+                    ? NSFileProviderItemIdentifier.rootContainer
+                    : NSFileProviderItemIdentifier(metadata.parentOcId)
+                return FileProviderItem(metadata: metadata, parentItemIdentifier: parentId)
+            }
             
         case .trashContainer:
             // Trash not implemented yet
@@ -137,14 +142,30 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             
         default:
             // Look up the item's metadata to get its remote path
-            guard let metadata = await database.itemMetadata(ocId: enumeratedItemIdentifier.rawValue) else {
+            var metadata = await database.itemMetadata(ocId: enumeratedItemIdentifier.rawValue)
+
+            // If not in DB, try to resolve by decoding the identifier (base64-encoded path)
+            if metadata == nil {
+                let raw = enumeratedItemIdentifier.rawValue
+                    .replacingOccurrences(of: "_", with: "/")
+                    .replacingOccurrences(of: "-", with: "+")
+                let padded = raw + String(repeating: "=", count: (4 - raw.count % 4) % 4)
+                if let data = Data(base64Encoded: padded),
+                   let remotePath = String(data: data, encoding: .utf8),
+                   !remotePath.isEmpty {
+                    let items = try await webdav.listDirectory(path: remotePath)
+                    if let serverItem = items.first {
+                        let newMeta = ItemMetadata(from: serverItem, parentOcId: ItemDatabase.rootContainerId)
+                        try await database.addItemMetadata(newMeta)
+                        metadata = newMeta
+                    }
+                }
+            }
+
+            guard let metadata = metadata, metadata.isDirectory else {
                 throw NSFileProviderError(.noSuchItem)
             }
-            
-            guard metadata.isDirectory else {
-                throw NSFileProviderError(.noSuchItem)
-            }
-            
+
             return try await enumerateDirectory(path: metadata.remotePath, parentOcId: metadata.ocId, webdav: webdav, database: database)
         }
     }
@@ -196,13 +217,132 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     }
     
     func enumerateChanges(for observer: NSFileProviderChangeObserver, from anchor: NSFileProviderSyncAnchor) {
-        logger.debug("Enumerating changes from anchor for: \(self.enumeratedItemIdentifier.rawValue)")
-        
-        // For now: re-enumerate and report all as updates
-        // A full implementation would track ETags and report actual changes
-        
-        let currentAnchor = currentSyncAnchor()
-        observer.finishEnumeratingChanges(upTo: currentAnchor, moreComing: false)
+        logger.info("Enumerating changes from anchor for: \(self.enumeratedItemIdentifier.rawValue)")
+
+        guard let ext = fpExtension else {
+            observer.finishEnumeratingChanges(upTo: currentSyncAnchor(), moreComing: false)
+            return
+        }
+
+        Task {
+            guard let webdav = ext.webdavClient, let database = ext.database else {
+                observer.finishEnumeratingChanges(upTo: currentSyncAnchor(), moreComing: false)
+                return
+            }
+
+            do {
+                // Determine path and parent for this container
+                let path: String
+                let parentOcId: String
+
+                switch enumeratedItemIdentifier {
+                case .rootContainer, .workingSet:
+                    path = "/"
+                    parentOcId = ItemDatabase.rootContainerId
+                case .trashContainer:
+                    observer.finishEnumeratingChanges(upTo: currentSyncAnchor(), moreComing: false)
+                    return
+                default:
+                    var folderMeta = await database.itemMetadata(ocId: enumeratedItemIdentifier.rawValue)
+
+                    // Resolve from server if not in DB
+                    if folderMeta == nil {
+                        let raw = enumeratedItemIdentifier.rawValue
+                            .replacingOccurrences(of: "_", with: "/")
+                            .replacingOccurrences(of: "-", with: "+")
+                        let padded = raw + String(repeating: "=", count: (4 - raw.count % 4) % 4)
+                        if let data = Data(base64Encoded: padded),
+                           let remotePath = String(data: data, encoding: .utf8),
+                           !remotePath.isEmpty {
+                            let items = try await webdav.listDirectory(path: remotePath)
+                            if let serverItem = items.first {
+                                let newMeta = ItemMetadata(from: serverItem, parentOcId: ItemDatabase.rootContainerId)
+                                try await database.addItemMetadata(newMeta)
+                                folderMeta = newMeta
+                            }
+                        }
+                    }
+
+                    guard let folderMeta = folderMeta, folderMeta.isDirectory else {
+                        observer.finishEnumeratingChanges(upTo: currentSyncAnchor(), moreComing: false)
+                        return
+                    }
+                    path = folderMeta.remotePath
+                    parentOcId = folderMeta.ocId
+                }
+
+                // Fetch current server state
+                let webdavItems = try await webdav.listDirectory(path: path)
+                let serverItems = Array(webdavItems.dropFirst()) // skip directory itself
+
+                // Check if this is effectively a first-time enumeration for this container
+                // (no children in DB). If so, report ALL items as updates.
+                let existingChildren = await database.childItems(parentOcId: parentOcId)
+                let isFirstEnum = existingChildren.isEmpty
+
+                // Build set of server ocIds for deletion detection
+                var serverOcIds = Set<String>()
+                var updatedItems: [NSFileProviderItem] = []
+
+                let parentIdentifier = parentOcId == ItemDatabase.rootContainerId
+                    ? NSFileProviderItemIdentifier.rootContainer
+                    : NSFileProviderItemIdentifier(parentOcId)
+
+                for webdavItem in serverItems {
+                    var metadata = ItemMetadata(from: webdavItem, parentOcId: parentOcId)
+                    serverOcIds.insert(metadata.ocId)
+
+                    // Check if item exists in DB and merge local state
+                    if !isFirstEnum, let existing = await database.itemMetadata(ocId: metadata.ocId) {
+                        // Preserve local state from DB
+                        metadata.isDownloaded = existing.isDownloaded
+                        metadata.isDownloading = existing.isDownloading
+                        metadata.status = existing.status
+                        if existing.size > 0 && metadata.size == 0 {
+                            metadata.size = existing.size
+                        }
+
+                        // Skip if server content AND local state are unchanged
+                        if existing.etag == metadata.etag
+                            && existing.isDownloaded == metadata.isDownloaded
+                            && existing.size == metadata.size {
+                            continue
+                        }
+                    }
+
+                    // New or changed item
+                    try await database.addItemMetadata(metadata)
+                    let item = FileProviderItem(metadata: metadata, parentItemIdentifier: parentIdentifier)
+                    updatedItems.append(item)
+                }
+
+                // Detect deletions: items in DB but not on server (skip on first enum)
+                var deletedIds: [NSFileProviderItemIdentifier] = []
+                for cached in existingChildren {
+                    if !serverOcIds.contains(cached.ocId) {
+                        if cached.isDirectory {
+                            try? await database.deleteDirectoryAndSubdirectories(ocId: cached.ocId)
+                        } else {
+                            try? await database.deleteItemMetadata(ocId: cached.ocId)
+                        }
+                        deletedIds.append(NSFileProviderItemIdentifier(cached.ocId))
+                    }
+                }
+
+                if !updatedItems.isEmpty {
+                    observer.didUpdate(updatedItems)
+                }
+                if !deletedIds.isEmpty {
+                    observer.didDeleteItems(withIdentifiers: deletedIds)
+                }
+
+                self.logger.info("Change enumeration: \(updatedItems.count) updates, \(deletedIds.count) deletes")
+            } catch {
+                self.logger.error("Change enumeration failed: \(error.localizedDescription)")
+            }
+
+            observer.finishEnumeratingChanges(upTo: currentSyncAnchor(), moreComing: false)
+        }
     }
     
     func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {

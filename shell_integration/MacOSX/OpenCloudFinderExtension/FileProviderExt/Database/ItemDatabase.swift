@@ -294,6 +294,26 @@ actor ItemDatabase {
         }
     }
     
+    /// Update file size after download
+    func updateSize(ocId: String, size: Int64) throws {
+        let sql = "UPDATE items SET size = ? WHERE oc_id = ?"
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            let error = String(cString: sqlite3_errmsg(db))
+            throw DatabaseError.updateFailed(error)
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_int64(stmt, 1, size)
+        sqlite3_bind_text(stmt, 2, ocId, -1, SQLITE_TRANSIENT)
+
+        if sqlite3_step(stmt) != SQLITE_DONE {
+            let error = String(cString: sqlite3_errmsg(db))
+            throw DatabaseError.updateFailed(error)
+        }
+    }
+
     /// Update status
     func setStatus(ocId: String, status: ItemStatus, error: String? = nil) throws {
         let sql = "UPDATE items SET status = ?, status_error = ?, is_downloading = ?, is_uploading = ? WHERE oc_id = ?"
@@ -323,6 +343,25 @@ actor ItemDatabase {
         }
     }
     
+    /// Get all downloaded (materialized) items
+    func downloadedItems() -> [ItemMetadata] {
+        let sql = "SELECT * FROM items WHERE is_downloaded = 1 ORDER BY is_directory DESC, filename ASC"
+        var stmt: OpaquePointer?
+
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return []
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var items: [ItemMetadata] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let metadata = metadataFromRow(stmt) {
+                items.append(metadata)
+            }
+        }
+        return items
+    }
+
     /// Clear all items (for re-enumeration)
     func clearAll() throws {
         let sql = "DELETE FROM items"

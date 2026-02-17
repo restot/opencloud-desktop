@@ -51,49 +51,80 @@
 - [x] 3.4.5 Verify extension receives credentials (serverUrl, username, OAuth token)
 
 ### 3.5 Real File Enumeration
-- [ ] 3.5.1 Update FileProviderEnumerator.swift to use WebDAV client
-- [ ] 3.5.2 Implement enumerateItems(): fetch from WebDAV if stale, return cached items
-- [ ] 3.5.3 Implement enumerateChanges(): compare server ETags with cached, report changes
-- [ ] 3.5.4 Signal enumerator on authentication changes
+- [x] 3.5.1 Update FileProviderEnumerator.swift to use WebDAV client
+- [x] 3.5.2 Implement enumerateItems(): fetch from WebDAV if stale, return cached items
+- [x] 3.5.3 Implement enumerateChanges(): compare server ETags with cached, report changes
+- [x] 3.5.4 Signal enumerator on authentication changes
 - [ ] 3.5.5 Test manual enumeration: add account, check Finder sidebar shows server files
 
 ### 3.6 On-Demand Download (fetchContents)
-- [ ] 3.6.1 Update FileProviderExtension.swift fetchContents() to look up remote path from database
-- [ ] 3.6.2 Create temp file in extension's container for download
-- [ ] 3.6.3 Download via WebDAV GET with progress reporting
-- [ ] 3.6.4 Mark item as downloaded in database
-- [ ] 3.6.5 Return downloaded file URL
+- [x] 3.6.1 Update FileProviderExtension.swift fetchContents() to look up remote path from database
+- [x] 3.6.2 Create temp file in extension's container for download
+- [x] 3.6.3 Download via WebDAV GET with progress reporting
+- [x] 3.6.4 Mark item as downloaded in database
+- [x] 3.6.5 Return downloaded file URL
 - [ ] 3.6.6 Test manual download: double-click file in Finder → downloads and opens
 
 ### 3.7 Upload Handling (createItem/modifyItem)
-- [ ] 3.7.1 Implement createItem for folders: MKCOL to create directory on server
-- [ ] 3.7.2 Implement createItem for files: PUT content to server
-- [ ] 3.7.3 After upload, PROPFIND to get server-assigned ETag/metadata
-- [ ] 3.7.4 Store new item in database, return updated FileProviderItem
-- [ ] 3.7.5 Implement modifyItem for content changes: PUT new content
-- [ ] 3.7.6 Implement modifyItem for rename/move: MOVE on server
-- [ ] 3.7.7 Update database with new metadata after modification
+- [x] 3.7.1 Implement createItem for folders: MKCOL to create directory on server
+- [x] 3.7.2 Implement createItem for files: PUT content to server
+- [x] 3.7.3 After upload, PROPFIND to get server-assigned ETag/metadata
+- [x] 3.7.4 Store new item in database, return updated FileProviderItem
+- [x] 3.7.5 Implement modifyItem for content changes: PUT new content
+- [x] 3.7.6 Implement modifyItem for rename/move: MOVE on server
+- [x] 3.7.7 Update database with new metadata after modification
 - [ ] 3.7.8 Test manual upload: drag file into Finder → uploads to server
 
 ### 3.8 Delete Operations
-- [ ] 3.8.1 Update deleteItem to look up remote path from database
-- [ ] 3.8.2 DELETE via WebDAV
-- [ ] 3.8.3 Remove from database
+- [x] 3.8.1 Update deleteItem to look up remote path from database
+- [x] 3.8.2 DELETE via WebDAV
+- [x] 3.8.3 Remove from database
 - [ ] 3.8.4 Test manual delete: delete in Finder → reflected on server
 
-## 4. Phase 4: Full VFS Features
-- [ ] 4.1 Implement download state tracking (cloud-only, downloading, downloaded)
-- [ ] 4.2 Implement eviction (offloading) like iCloud "Optimize Mac Storage"
-- [ ] 4.3 Add NSProgress integration for progress reporting in Finder
-- [ ] 4.4 Add error handling and retry logic for network failures
-- [ ] 4.5 Add conflict resolution for simultaneous edits
+### 3.9 Functional Gaps (discovered during code audit)
+- [x] 3.9.1 Fix hardcoded WebDAV path "/remote.php/webdav" — extend XPC protocol with davPath parameter, pass space WebDAV URL from main app
+- [x] 3.9.2 Fix upload streaming: change WebDAVClient.uploadFile from Data(contentsOf:) to session.upload(for:fromFile:) to prevent OOM on large files
+- [x] 3.9.3 Fix workingSet enumeration: query DB for downloaded items instead of duplicating root enumeration
+- [x] 3.9.4 Implement materializedItemsDidChange(): iterate system enumerator, sync DB isDownloaded state
 
-## 5. Testing and Documentation
-- [ ] 5.1 Manual test: Add account, verify domain appears in Finder sidebar
-- [ ] 5.2 Manual test: Browse remote files in Finder
-- [ ] 5.3 Manual test: Download file on-demand (double-click)
-- [ ] 5.4 Manual test: Upload new file (drag into Finder)
-- [ ] 5.5 Manual test: Rename/move file in Finder
-- [ ] 5.6 Manual test: Delete file in Finder
-- [ ] 5.7 Manual test: Create folder in Finder
-- [ ] 5.8 Update documentation with macOS VFS setup instructions
+## 4. Phase 4: Full VFS Features
+- [x] 4.1 Implement download state tracking (cloud-only, downloading, downloaded)
+- [x] 4.2 Implement eviction (offloading) like iCloud "Optimize Mac Storage"
+- [x] 4.3 Add NSProgress integration for progress reporting in Finder
+- [x] 4.4 Add error handling and retry logic for network failures
+- [x] 4.5 Add conflict resolution for simultaneous edits
+
+## 4.5 Phase 4.5: Runtime Stability Fixes
+- [x] 4.5.1 Periodic OAuth token refresh (4-min timer + retry on 401)
+- [x] 4.5.2 Shared credential store across extension instances (static properties)
+- [x] 4.5.3 Credential persistence via UserDefaults (app group container)
+- [x] 4.5.4 Restore credentials on extension init (cross-restart availability)
+- [x] 4.5.5 System cache invalidation via reimportItems(below: .rootContainer) after auth
+- [x] 4.5.6 Safe reimport handling (mayAlreadyExist → PROPFIND, not upload)
+- [x] 4.5.7 MKCOL 405 fallback (directory already exists → PROPFIND instead)
+- [x] 4.5.8 Auth waiting in createItem (15s timeout for XPC credential delivery)
+- [x] 4.5.9 On-demand item/folder resolution for stale identifiers in enumerateChanges
+- [x] 4.5.10 First-time enumeration detection in enumerateChanges (empty DB → full report)
+- [x] 4.5.11 XML parser propstat ordering fix (removed isSuccess guard, use empty-value checks)
+- [x] 4.5.12 Error wrapping (WebDAVError → NSFileProviderError) in createItem/modifyItem
+
+## 5. macOS App Bundle Packaging Fix
+> Ref: [Discussion #5](https://github.com/restot/opencloud-desktop/discussions/5#discussioncomment-15749143) — crash on launch for distributed builds due to hardcoded @rpath
+
+- [x] 5.1 Audit current RPATH configuration in CMake (no RPATH settings existed anywhere)
+- [x] 5.2 Identify all dylibs bundled in OpenCloud.app (libOpenCloudGui, libOpenCloudLibSync)
+- [x] 5.3 Fix CMake: add CMAKE_INSTALL_RPATH=@executable_path/../Frameworks, install dylibs into Contents/Frameworks/
+- [x] 5.4 Enable macOS packaging in CI (removed `if: matrix.target != 'macos-clang-arm64'` from Package step)
+- [ ] 5.5 Test: build, zip, transfer to clean machine (or different user), verify app launches without dylib errors
+- [ ] 5.6 Verify extensions (FileProviderExt.appex, FinderSyncExt.appex) also resolve their dylib dependencies portably
+
+## 6. Testing and Documentation
+- [ ] 6.1 Manual test: Add account, verify domain appears in Finder sidebar
+- [ ] 6.2 Manual test: Browse remote files in Finder
+- [ ] 6.3 Manual test: Download file on-demand (double-click)
+- [ ] 6.4 Manual test: Upload new file (drag into Finder)
+- [ ] 6.5 Manual test: Rename/move file in Finder
+- [ ] 6.6 Manual test: Delete file in Finder
+- [ ] 6.7 Manual test: Create folder in Finder
+- [ ] 6.8 Manual test: Distribute .app to clean machine, verify launch and extensions
+- [x] 6.9 Update documentation with macOS VFS setup instructions

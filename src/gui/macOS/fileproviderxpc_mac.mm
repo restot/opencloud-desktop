@@ -17,12 +17,15 @@
 #include "macOS/fileproviderdomainmanager.h"
 
 #include <QLoggingCategory>
+#include <QTimer>
 
 #include "common/utility.h"
 #include "gui/accountmanager.h"
 #include "libsync/account.h"
 #include "libsync/creds/abstractcredentials.h"
 #include "libsync/creds/httpcredentials.h"
+#include "libsync/graphapi/spacesmanager.h"
+#include "libsync/graphapi/space.h"
 
 #import <Foundation/Foundation.h>
 #import <FileProvider/FileProvider.h>
@@ -43,6 +46,13 @@ Q_LOGGING_CATEGORY(lcFileProviderXPC, "gui.fileprovider.xpc", QtInfoMsg)
 FileProviderXPC::FileProviderXPC(QObject *parent)
     : QObject(parent)
 {
+    // Periodically re-send credentials to the extension so it always has a fresh
+    // OAuth token.  Tokens typically expire in 5-15 minutes; re-sending every
+    // 4 minutes keeps the extension authenticated.
+    _credentialRefreshTimer = new QTimer(this);
+    _credentialRefreshTimer->setInterval(4 * 60 * 1000); // 4 minutes
+    connect(_credentialRefreshTimer, &QTimer::timeout, this, &FileProviderXPC::refreshCredentials);
+    _credentialRefreshTimer->start();
 }
 
 FileProviderXPC::~FileProviderXPC()
@@ -120,12 +130,16 @@ void FileProviderXPC::connectToFileProviderDomains()
                                 }
                                 
                                 connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(ClientCommunicationProtocol)];
+                                connection.invalidationHandler = ^{
+                                    NSLog(@"OpenCloud XPC: URL-based connection invalidated");
+                                    QMetaObject::invokeMethod(this, &FileProviderXPC::reconnectAfterInvalidation, Qt::QueuedConnection);
+                                };
                                 [connection resume];
-                                
+
                                 id<ClientCommunicationProtocol> proxy = [connection remoteObjectProxyWithErrorHandler:^(NSError *proxyError) {
                                     NSLog(@"OpenCloud XPC: Proxy error: %@", proxyError);
                                 }];
-                                
+
                                 if (proxy) {
                                     [proxy getFileProviderDomainIdentifierWithCompletionHandler:^(NSString *extDomainId, NSError *idError) {
                                         if (!idError && extDomainId) {
@@ -192,6 +206,8 @@ void FileProviderXPC::connectToFileProviderDomains()
                             };
                             connection.invalidationHandler = ^{
                                 qCInfo(lcFileProviderXPC) << "XPC connection invalidated for domain:" << QString::fromNSString(domainId);
+                                // Extension process was replaced — schedule reconnection
+                                QMetaObject::invokeMethod(this, &FileProviderXPC::reconnectAfterInvalidation, Qt::QueuedConnection);
                             };
                             [connection resume];
                             
@@ -303,7 +319,7 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
 {
     NSLog(@"OpenCloud XPC: authenticateFileProviderDomain() start: %s", domainIdentifier.toUtf8().constData());
     qCInfo(lcFileProviderXPC) << "Authenticating domain:" << domainIdentifier;
-    
+
     // Find the account for this domain
     const auto accountState = FileProviderDomainManager::accountStateFromDomainIdentifier(domainIdentifier);
     if (!accountState) {
@@ -311,26 +327,30 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
         qCWarning(lcFileProviderXPC) << "No account found for domain:" << domainIdentifier;
         return;
     }
-    
+
+    // Always connect to account state changes so we retry when token becomes available
+    connect(accountState.data(), &AccountState::stateChanged,
+            this, &FileProviderXPC::slotAccountStateChanged, Qt::UniqueConnection);
+
     const auto account = accountState->account();
     if (!account) {
         NSLog(@"OpenCloud XPC: Account is null");
         qCWarning(lcFileProviderXPC) << "Account is null for domain:" << domainIdentifier;
         return;
     }
-    
+
     const auto credentials = account->credentials();
     if (!credentials) {
         NSLog(@"OpenCloud XPC: Credentials are null");
         qCWarning(lcFileProviderXPC) << "Credentials are null for domain:" << domainIdentifier;
         return;
     }
-    
+
     // Get user info
     NSString *user = account->davDisplayName().toNSString();
     NSString *userId = account->uuid().toString(QUuid::WithoutBraces).toNSString();
     NSString *serverUrl = account->url().toString().toNSString();
-    
+
     // Get password/token - for OAuth, get the access token from HttpCredentials
     NSString *password = @"";
     if (auto *httpCreds = qobject_cast<HttpCredentials *>(credentials)) {
@@ -340,14 +360,32 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
             password = accessToken.toNSString();
             qCDebug(lcFileProviderXPC) << "Using access token for authentication";
         } else {
-            NSLog(@"OpenCloud XPC: Access token is empty!");
-            qCWarning(lcFileProviderXPC) << "Access token is empty";
+            NSLog(@"OpenCloud XPC: Access token not yet available, skipping authentication");
+            qCInfo(lcFileProviderXPC) << "Access token not yet available for domain:" << domainIdentifier;
+            return;
         }
     } else {
         NSLog(@"OpenCloud XPC: Credentials are not HttpCredentials");
         qCWarning(lcFileProviderXPC) << "Credentials are not HttpCredentials";
+        return;
     }
-    
+
+    // Look up the personal space WebDAV URL path for this account
+    NSString *davPath = @"";
+    if (auto *spacesManager = account->spacesManager()) {
+        for (const auto *space : spacesManager->spaces()) {
+            if (space->drive().getDriveType() == QLatin1String("personal")) {
+                QUrl webdavUrl = space->webdavUrl();
+                davPath = webdavUrl.path().toNSString();
+                qCInfo(lcFileProviderXPC) << "Found personal space WebDAV path:" << webdavUrl.path();
+                break;
+            }
+        }
+    }
+    if (davPath.length == 0) {
+        qCInfo(lcFileProviderXPC) << "No personal space found, extension will use legacy /remote.php/webdav";
+    }
+
     // Get the service proxy
     void *servicePtr = _clientCommServices.value(domainIdentifier);
     if (!servicePtr) {
@@ -355,22 +393,20 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
         qCWarning(lcFileProviderXPC) << "No service connection for domain:" << domainIdentifier;
         return;
     }
-    
+
     NSObject<ClientCommunicationProtocol> *service = (NSObject<ClientCommunicationProtocol> *)servicePtr;
-    
-    NSLog(@"OpenCloud XPC: Calling configureAccountWithUser:%@ serverUrl:%@ password:(%lu chars)", user, serverUrl, (unsigned long)password.length);
+
+    NSLog(@"OpenCloud XPC: Calling configureAccountWithUser:%@ serverUrl:%@ password:(%lu chars) davPath:%@", user, serverUrl, (unsigned long)password.length, davPath);
     qCInfo(lcFileProviderXPC) << "Sending credentials to domain:" << domainIdentifier
                               << "user:" << QString::fromNSString(user)
-                              << "server:" << QString::fromNSString(serverUrl);
-    
+                              << "server:" << QString::fromNSString(serverUrl)
+                              << "davPath:" << QString::fromNSString(davPath);
+
     [service configureAccountWithUser:user
                                userId:userId
                             serverUrl:serverUrl
-                             password:password];
-    
-    // Connect to account state changes
-    connect(accountState.data(), &AccountState::stateChanged, 
-            this, &FileProviderXPC::slotAccountStateChanged, Qt::UniqueConnection);
+                             password:password
+                              davPath:davPath];
 }
 
 void FileProviderXPC::unauthenticateFileProviderDomain(const QString &domainIdentifier)
@@ -415,23 +451,63 @@ void FileProviderXPC::slotAccountStateChanged(AccountState::State state)
     if (!accountState) {
         return;
     }
-    
+
     const QString domainId = accountState->account()->uuid().toString(QUuid::WithoutBraces);
-    
+
     qCDebug(lcFileProviderXPC) << "Account state changed for domain:" << domainId << "state:" << state;
-    
+
     switch (state) {
     case AccountState::Disconnected:
     case AccountState::SignedOut:
         unauthenticateFileProviderDomain(domainId);
         break;
     case AccountState::Connected:
+        // If we don't have an XPC connection for this domain, reconnect first
+        if (!_clientCommServices.contains(domainId)) {
+            qCInfo(lcFileProviderXPC) << "No XPC connection for domain:" << domainId << "- reconnecting";
+            connectToFileProviderDomains();
+        }
         authenticateFileProviderDomain(domainId);
         break;
     case AccountState::Connecting:
         // Do nothing while connecting
         break;
     }
+}
+
+void FileProviderXPC::reconnectAfterInvalidation()
+{
+    if (_reconnectPending) {
+        return;
+    }
+    _reconnectPending = true;
+
+    qCInfo(lcFileProviderXPC) << "XPC connection invalidated, scheduling reconnection in 3 seconds";
+
+    // Clear stale connections
+    for (auto it = _clientCommServices.begin(); it != _clientCommServices.end(); ++it) {
+        if (it.value()) {
+            [(NSObject *)it.value() release];
+        }
+    }
+    _clientCommServices.clear();
+
+    // Delay to allow the new extension process to start
+    QTimer::singleShot(3000, this, [this]() {
+        _reconnectPending = false;
+        qCInfo(lcFileProviderXPC) << "Reconnecting to FileProvider domains after invalidation";
+        connectToFileProviderDomains();
+        authenticateFileProviderDomains();
+    });
+}
+
+void FileProviderXPC::refreshCredentials()
+{
+    if (_clientCommServices.isEmpty()) {
+        return;
+    }
+    qCDebug(lcFileProviderXPC) << "Periodic credential refresh for" << _clientCommServices.count() << "domains";
+    authenticateFileProviderDomains();
 }
 
 } // namespace Mac

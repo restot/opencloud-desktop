@@ -62,16 +62,16 @@ final class WebDAVXMLParser: NSObject, XMLParserDelegate {
     /// Parse XML data and return WebDAV items
     func parse(data: Data) -> [WebDAVItem]? {
         items = []
-        
+
         let parser = XMLParser(data: data)
         parser.delegate = self
         parser.shouldProcessNamespaces = true
-        
+
         guard parser.parse() else {
             logger.error("Failed to parse WebDAV XML response: \(parser.parserError?.localizedDescription ?? "unknown error")")
             return nil
         }
-        
+
         return items
     }
     
@@ -98,94 +98,94 @@ final class WebDAVXMLParser: NSObject, XMLParserDelegate {
     
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
         let trimmedText = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         guard var response = currentResponse else { return }
-        
+
+        // NOTE: In WebDAV multistatus XML, <status> comes AFTER <prop> inside
+        // each <propstat>. Properties from the 200 propstat and 404 propstat are
+        // disjoint sets, so we unconditionally set all property values.
+        // Empty elements from the 404 propstat (e.g., <oc:id/>) produce empty
+        // trimmedText, which we skip for string properties via isEmpty checks.
+
         switch elementName {
         case "response":
-            // Only add successful responses
             if let item = response.build(baseURL: baseURL) {
                 items.append(item)
             }
             currentResponse = nil
-            
+
         case "propstat":
             isInPropstat = false
-            
+
         case "status":
             if isInPropstat {
                 currentStatus = trimmedText
-                // Only use properties from successful propstats
-                response.isSuccess = trimmedText.contains("200")
             }
-            
+
         case "href":
             response.href = trimmedText
-            
+
         case "getcontenttype":
-            if response.isSuccess {
+            if !trimmedText.isEmpty {
                 response.contentType = trimmedText
             }
-            
+
         case "getcontentlength":
-            if response.isSuccess {
-                response.size = Int64(trimmedText) ?? 0
+            let parsed = Int64(trimmedText) ?? 0
+            if parsed > 0 {
+                response.size = parsed
             }
-            
+
         case "getlastmodified":
-            if response.isSuccess {
-                response.lastModified = Self.parseDate(trimmedText)
+            if !trimmedText.isEmpty, let date = Self.parseDate(trimmedText) {
+                response.lastModified = date
             }
-            
+
         case "creationdate":
-            if response.isSuccess {
-                response.creationDate = Self.parseDate(trimmedText)
+            if !trimmedText.isEmpty, let date = Self.parseDate(trimmedText) {
+                response.creationDate = date
             }
-            
+
         case "getetag":
-            if response.isSuccess {
-                // Remove quotes from etag
+            if !trimmedText.isEmpty {
                 response.etag = trimmedText.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
             }
-            
-        case "id": // oc:id - the unique identifier
-            if response.isSuccess {
+
+        case "id": // oc:id
+            if !trimmedText.isEmpty {
                 response.ocId = trimmedText
             }
-            
+
         case "fileid": // oc:fileid
-            if response.isSuccess {
+            if !trimmedText.isEmpty {
                 response.fileId = trimmedText
             }
-            
+
         case "permissions": // oc:permissions
-            if response.isSuccess {
+            if !trimmedText.isEmpty {
                 response.permissions = trimmedText
             }
-            
+
         case "owner-id": // oc:owner-id
-            if response.isSuccess {
+            if !trimmedText.isEmpty {
                 response.ownerId = trimmedText
             }
-            
+
         case "owner-display-name": // oc:owner-display-name
-            if response.isSuccess {
+            if !trimmedText.isEmpty {
                 response.ownerDisplayName = trimmedText
             }
-            
+
         case "resourcetype":
-            // Note: resourcetype is handled via collection child element
             break
-            
+
         case "collection":
-            if response.isSuccess {
-                response.isDirectory = true
-            }
-            
+            response.isDirectory = true
+
         default:
             break
         }
-        
+
         currentResponse = response
         currentText = ""
     }
@@ -224,7 +224,6 @@ private struct ResponseBuilder {
     var ownerId: String = ""
     var ownerDisplayName: String = ""
     var isDirectory: Bool = false
-    var isSuccess: Bool = false
     
     func build(baseURL: URL) -> WebDAVItem? {
         guard let href = href else {
@@ -232,7 +231,7 @@ private struct ResponseBuilder {
             return nil
         }
         
-        NSLog("[WebDAVXMLParser] build: href=%@, isDir=%d, contentType=%@", href, isDirectory, contentType ?? "nil")
+        NSLog("[WebDAVXMLParser] build: href=%@, isDir=%d, size=%lld, etag=%@", href, isDirectory, size, etag ?? "nil")
         
         // URL decode the href first
         let decodedHref = href.removingPercentEncoding ?? href

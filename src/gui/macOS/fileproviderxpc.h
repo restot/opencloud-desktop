@@ -65,10 +65,14 @@ namespace Mac {
 
     private Q_SLOTS:
         void slotAccountStateChanged(AccountState::State state);
+        void reconnectAfterInvalidation();
+        void refreshCredentials();
 
     private:
         // Keys are FileProvider domain identifiers, values are NSObject<ClientCommunicationProtocol>*
         QHash<QString, void *> _clientCommServices;
+        bool _reconnectPending = false;
+        QTimer *_credentialRefreshTimer = nullptr;
     };
 
 } // namespace Mac

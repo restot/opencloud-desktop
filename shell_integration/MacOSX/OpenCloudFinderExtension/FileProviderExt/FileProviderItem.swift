@@ -46,7 +46,7 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
     var capabilities: NSFileProviderItemCapabilities {
         var caps: NSFileProviderItemCapabilities = []
         let perms = _permissions.uppercased()
-        
+
         // G = readable
         if perms.contains("G") {
             if contentType == .folder {
@@ -54,17 +54,17 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
             }
             caps.insert(.allowsReading)
         }
-        
+
         // D = deletable
         if perms.contains("D") {
             caps.insert(.allowsDeleting)
         }
-        
+
         // W = writable (for files)
         if perms.contains("W"), contentType != .folder {
             caps.insert(.allowsWriting)
         }
-        
+
         // NV = renameable, moveable
         if perms.contains("N") || perms.contains("V") {
             caps.formUnion([.allowsRenaming, .allowsReparenting])
@@ -72,12 +72,12 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
                 caps.insert(.allowsAddingSubItems)
             }
         }
-        
+
         // CK = folder allows adding sub-items
         if (perms.contains("C") || perms.contains("K")), contentType == .folder {
             caps.insert(.allowsAddingSubItems)
         }
-        
+
         // Default fallback for items without permissions
         if caps.isEmpty {
             caps = [.allowsReading]
@@ -85,14 +85,22 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
                 caps.insert(.allowsContentEnumerating)
             }
         }
-        
+
+        // Downloaded files can be evicted (Remove Download in Finder)
+        if contentType != .folder && _isDownloaded {
+            caps.insert(.allowsEvicting)
+        }
+
         return caps
     }
     
     var itemVersion: NSFileProviderItemVersion {
-        // Use ETag for versioning (consistent with server)
-        let versionData = _etag.data(using: .utf8) ?? Data()
-        return NSFileProviderItemVersion(contentVersion: versionData, metadataVersion: versionData)
+        // Use ETag for content version (consistent with server)
+        let contentData = _etag.data(using: .utf8) ?? Data()
+        // Include download state in metadata version so Finder refreshes after download
+        let metadataString = "\(_etag):\(_isDownloaded ? "1" : "0")"
+        let metadataData = metadataString.data(using: .utf8) ?? Data()
+        return NSFileProviderItemVersion(contentVersion: contentData, metadataVersion: metadataData)
     }
     
     // MARK: - Download/Upload State
@@ -131,7 +139,10 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
         // Use current date as fallback if server didn't provide dates
         self.creationDate = metadata.creationDate ?? metadata.syncTime
         self.contentModificationDate = metadata.lastModified ?? metadata.syncTime
-        self._etag = metadata.etag.isEmpty ? UUID().uuidString : metadata.etag
+        // Use stable deterministic fallback when server doesn't provide ETag.
+        // Random UUIDs cause contentVersion to differ every time the item is
+        // constructed, making the system think content constantly changes.
+        self._etag = metadata.etag.isEmpty ? "stable-\(metadata.ocId)" : metadata.etag
         // Provide default permissions if empty - folders need enumeration, files need reading
         self._permissions = metadata.permissions.isEmpty ? (metadata.isDirectory ? "RGDNVCK" : "RGDNVW") : metadata.permissions
         self._isDownloaded = metadata.isDownloaded

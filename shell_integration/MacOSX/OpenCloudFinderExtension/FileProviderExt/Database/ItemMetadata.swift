@@ -40,7 +40,7 @@ struct ItemMetadata: Sendable, Equatable {
     let contentType: String
     
     /// File size in bytes
-    let size: Int64
+    var size: Int64
     
     /// Last modification date
     let lastModified: Date?

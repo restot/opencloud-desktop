@@ -64,11 +64,11 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
         completionHandler(identifier, nil)
     }
     
-    func configureAccount(withUser user: String, userId: String, serverUrl: String, password: String) {
+    func configureAccount(withUser user: String, userId: String, serverUrl: String, password: String, davPath: String) {
         let passwordPreview = password.isEmpty ? "(empty)" : "(\(password.count) chars)"
-        NSLog("[FileProviderExt] configureAccount: user=%@, serverUrl=%@, password=%@", user, serverUrl, passwordPreview)
-        logger.info("Received account configuration over XPC for user: \(user) at server: \(serverUrl)")
-        fpExtension.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password)
+        NSLog("[FileProviderExt] configureAccount: user=%@, serverUrl=%@, password=%@, davPath=%@", user, serverUrl, passwordPreview, davPath)
+        logger.info("Received account configuration over XPC for user: \(user) at server: \(serverUrl) davPath: \(davPath)")
+        fpExtension.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath)
     }
     
     func removeAccountConfig() {
