@@ -181,3 +181,4 @@ test/gui/reports
 */**/__pycache__/
 tools/crash_reports/
 .claude
+./*/.claude
