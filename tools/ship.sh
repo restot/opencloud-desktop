@@ -14,6 +14,8 @@ SIGN_ID="Developer ID Application: Illia Barkov ($TEAM_ID)"
 NOTARY_PROFILE="OpenCloud"
 
 CRAFT_LIB="$HOME/Documents/craft/macos-clang-arm64/lib"
+CRAFT_PLUGINS="$HOME/Documents/craft/macos-clang-arm64/plugins"
+CRAFT_QML="$HOME/Documents/craft/macos-clang-arm64/qml"
 BUILD_BIN="$HOME/Documents/craft/macos-clang-arm64/build/opencloud/opencloud-desktop/work/build/bin"
 BUILD_APP="$BUILD_BIN/OpenCloud.app"
 
@@ -120,6 +122,64 @@ mkdir -p "$STAGE_DIR"
 cp -R "$BUILD_APP" "$STAGE_APP"
 echo "  Copied to $STAGE_APP"
 
+# ─── QT PLUGINS ─────────────────────────────────────────────────────────────
+
+step "Bundling Qt plugins"
+
+PLUGIN_DIR="$STAGE_APP/Contents/PlugIns"
+
+# Qt plugin categories needed at runtime
+QT_PLUGIN_DIRS=(platforms imageformats styles tls iconengines sqldrivers)
+
+for plugin_cat in "${QT_PLUGIN_DIRS[@]}"; do
+    src_dir="$CRAFT_PLUGINS/$plugin_cat"
+    dst_dir="$PLUGIN_DIR/$plugin_cat"
+    if [ -d "$src_dir" ]; then
+        mkdir -p "$dst_dir"
+        for dylib in "$src_dir"/*.dylib; do
+            [ -f "$dylib" ] || continue
+            cp "$dylib" "$dst_dir/"
+            echo "  + $plugin_cat/$(basename "$dylib")"
+        done
+    else
+        echo "  WARNING: $src_dir not found"
+    fi
+done
+
+# ─── QML MODULES ────────────────────────────────────────────────────────────
+
+step "Bundling QML modules"
+
+QML_DIR="$STAGE_APP/Contents/Resources/qml"
+mkdir -p "$QML_DIR"
+
+# Copy required QML module trees
+QML_MODULES=(QtQuick QtQml QtCore eu)
+
+for mod in "${QML_MODULES[@]}"; do
+    if [ -d "$CRAFT_QML/$mod" ]; then
+        cp -R "$CRAFT_QML/$mod" "$QML_DIR/"
+        echo "  + $mod/"
+    else
+        echo "  WARNING: QML module $mod not found"
+    fi
+done
+
+# Also copy top-level qmldir/qmltypes if present
+for f in "$CRAFT_QML"/builtins.qmltypes "$CRAFT_QML"/jsroot.qmltypes; do
+    [ -f "$f" ] && cp "$f" "$QML_DIR/"
+done
+
+# qt.conf tells Qt where to find plugins and QML modules
+mkdir -p "$STAGE_APP/Contents/Resources"
+cat > "$STAGE_APP/Contents/Resources/qt.conf" << 'QTCONF'
+[Paths]
+Plugins = PlugIns
+QmlImports = Resources/qml
+QTCONF
+
+echo "  Created qt.conf"
+
 # ─── BUNDLE DYLIBS ──────────────────────────────────────────────────────────
 
 step "Bundling dylibs and frameworks"
@@ -187,52 +247,51 @@ copy_framework() {
     return 0
 }
 
-# Collect all deps: both @rpath and absolute Craft paths
+# Find all Mach-O binaries (cached per pass to avoid repeated scanning)
+find_machos() {
+    find "$1" -type f -print0 | xargs -0 -P8 file 2>/dev/null | grep 'Mach-O' | cut -d: -f1
+}
+
+# Collect all deps: both @rpath and absolute Craft paths (parallelized)
 collect_deps() {
     local dir="$1"
-    local deps=""
-    while IFS= read -r bin; do
-        local bin_deps
-        # @rpath deps → strip prefix
-        bin_deps=$(otool -L "$bin" 2>/dev/null | grep '@rpath/' | awk '{print $1}' | sed 's|@rpath/||' || true)
-        if [ -n "$bin_deps" ]; then
-            deps="$deps"$'\n'"$bin_deps"
-        fi
-        # Absolute Craft lib paths → extract basename
-        bin_deps=$(otool -L "$bin" 2>/dev/null | grep "$HOME/Documents/craft/" | awk '{print $1}' || true)
-        if [ -n "$bin_deps" ]; then
-            while IFS= read -r abspath; do
-                deps="$deps"$'\n'"$(basename "$abspath")"
-            done <<< "$bin_deps"
-        fi
-    done < <(find "$dir" -type f -exec sh -c 'file "$1" 2>/dev/null | grep -q "Mach-O"' _ {} \; -print)
-    echo "$deps" | sort -u | grep -v '^$' || true
+    find_machos "$dir" | xargs -P8 -I{} otool -L {} 2>/dev/null | awk -v home="$HOME" '
+        /@rpath\// { sub(/^[[:space:]]+/, ""); sub(/ \(.*/, ""); sub(/@rpath\//, ""); print }
+        index($0, home"/Documents/craft/") { sub(/^[[:space:]]+/, ""); sub(/ \(.*/, ""); n=split($0, a, "/"); print a[n] }
+    ' | sort -u || true
 }
 
 RPATH_NEW="@executable_path/../Frameworks"
 
-# Rewrite absolute paths and rpaths on all Mach-O binaries in the staged app
+# Rewrite absolute paths and rpaths on a single Mach-O binary
+fix_one_binary() {
+    local bin="$1"
+    local home="$2"
+    local rpath_new="$3"
+    # Remove old absolute rpaths (LC_RPATH entries)
+    for old_rpath in $(otool -l "$bin" 2>/dev/null | grep -A2 LC_RPATH | grep 'path /Users' | awk '{print $2}' || true); do
+        install_name_tool -delete_rpath "$old_rpath" "$bin" 2>/dev/null || true
+    done
+    # Rewrite absolute Craft lib paths in LC_LOAD_DYLIB to @rpath/name
+    for abs_dep in $(otool -L "$bin" 2>/dev/null | grep "$home/Documents/craft/" | awk '{print $1}' || true); do
+        local_name=$(basename "$abs_dep")
+        install_name_tool -change "$abs_dep" "@rpath/$local_name" "$bin" 2>/dev/null || true
+    done
+    # Rewrite the library's own install name if it's an absolute craft path
+    old_id=$(otool -D "$bin" 2>/dev/null | tail -1 || true)
+    if [[ "$old_id" == *"/Documents/craft/"* ]]; then
+        install_name_tool -id "@rpath/$(basename "$old_id")" "$bin" 2>/dev/null || true
+    fi
+    # Add @executable_path/../Frameworks if missing
+    if ! otool -l "$bin" 2>/dev/null | grep -q "$rpath_new"; then
+        install_name_tool -add_rpath "$rpath_new" "$bin" 2>/dev/null || true
+    fi
+}
+export -f fix_one_binary
+
+# Rewrite absolute paths and rpaths on all Mach-O binaries (parallelized)
 fix_paths() {
-    while IFS= read -r bin; do
-        # Remove old absolute rpaths (LC_RPATH entries)
-        for old_rpath in $(otool -l "$bin" 2>/dev/null | grep -A2 LC_RPATH | grep 'path /Users' | awk '{print $2}' || true); do
-            install_name_tool -delete_rpath "$old_rpath" "$bin" 2>/dev/null || true
-        done
-        # Rewrite absolute Craft lib paths in LC_LOAD_DYLIB to @rpath/name
-        for abs_dep in $(otool -L "$bin" 2>/dev/null | grep "$HOME/Documents/craft/" | awk '{print $1}' || true); do
-            local_name=$(basename "$abs_dep")
-            install_name_tool -change "$abs_dep" "@rpath/$local_name" "$bin" 2>/dev/null || true
-        done
-        # Rewrite the library's own install name if it's an absolute craft path
-        old_id=$(otool -D "$bin" 2>/dev/null | tail -1 || true)
-        if [[ "$old_id" == *"/Documents/craft/"* ]]; then
-            install_name_tool -id "@rpath/$(basename "$old_id")" "$bin" 2>/dev/null || true
-        fi
-        # Add @executable_path/../Frameworks if missing
-        if ! otool -l "$bin" 2>/dev/null | grep -q "$RPATH_NEW"; then
-            install_name_tool -add_rpath "$RPATH_NEW" "$bin" 2>/dev/null || true
-        fi
-    done < <(find "$STAGE_APP" -type f -exec sh -c 'file "$1" 2>/dev/null | grep -q "Mach-O"' _ {} \; -print)
+    find_machos "$STAGE_APP" | xargs -P8 -I{} bash -c 'fix_one_binary "$@"' _ {} "$HOME" "$RPATH_NEW"
 }
 
 # Iteratively: copy deps → fix paths → check for new deps → repeat
@@ -289,33 +348,48 @@ for lib in "$FW_DIR"/*.dylib; do
     sign_binary "$lib"
 done
 
-# 2. PlugIns — standalone binaries
-echo "  Signing plugins..."
+# 2. Qt plugins (in subdirectories)
+echo "  Signing Qt plugins..."
+for plugin_cat in "${QT_PLUGIN_DIRS[@]}"; do
+    for plib in "$STAGE_APP/Contents/PlugIns/$plugin_cat"/*.dylib; do
+        [ -f "$plib" ] || continue
+        sign_binary "$plib"
+    done
+done
+
+# 2b. QML module dylibs
+echo "  Signing QML module plugins..."
+while IFS= read -r qml_dylib; do
+    sign_binary "$qml_dylib"
+done < <(find "$STAGE_APP/Contents/Resources/qml" -name '*.dylib' -type f 2>/dev/null)
+
+# 3. PlugIns — standalone binaries (.so)
+echo "  Signing VFS plugins..."
 for so in "$STAGE_APP/Contents/PlugIns"/*.so; do
     [ -f "$so" ] || continue
     sign_binary "$so"
 done
 
-# 3. FinderSyncExt.appex
+# 4. FinderSyncExt.appex
 if [ -d "$STAGE_APP/Contents/PlugIns/FinderSyncExt.appex" ]; then
     echo "  Signing FinderSyncExt.appex..."
     sign_binary "$STAGE_APP/Contents/PlugIns/FinderSyncExt.appex"
 fi
 
-# 4. FileProviderExt.appex (with entitlements)
+# 5. FileProviderExt.appex (with entitlements)
 if [ -d "$STAGE_APP/Contents/PlugIns/FileProviderExt.appex" ]; then
     echo "  Signing FileProviderExt.appex..."
     sign_binary "$STAGE_APP/Contents/PlugIns/FileProviderExt.appex" "$ENTITLEMENTS_DIR/appex.plist"
 fi
 
-# 5. Helper executables
+# 6. Helper executables
 echo "  Signing helper executables..."
 for helper in "$STAGE_APP/Contents/MacOS/opencloudcmd" "$STAGE_APP/Contents/MacOS/opencloud_crash_reporter"; do
     [ -f "$helper" ] || continue
     sign_binary "$helper"
 done
 
-# 6. Main app (last)
+# 7. Main app (last)
 echo "  Signing OpenCloud.app..."
 sign_binary "$STAGE_APP" "$ENTITLEMENTS_DIR/app.plist"
 
@@ -328,7 +402,16 @@ echo "  Signature verified"
 step "Creating DMG"
 
 rm -f "$DMG_PATH"
-hdiutil create -volname "OpenCloud" -srcfolder "$STAGE_APP" -ov -format UDZO "$DMG_PATH" 2>&1
+
+# Build a temp folder with app + Applications symlink for drag-to-install
+DMG_STAGE="$STAGE_DIR/dmg-stage"
+rm -rf "$DMG_STAGE"
+mkdir -p "$DMG_STAGE"
+cp -R "$STAGE_APP" "$DMG_STAGE/"
+ln -s /Applications "$DMG_STAGE/Applications"
+
+hdiutil create -volname "OpenCloud" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG_PATH" 2>&1
+rm -rf "$DMG_STAGE"
 sign_binary "$DMG_PATH"
 echo "  Created: $DMG_PATH"
 ls -lh "$DMG_PATH"
@@ -340,7 +423,7 @@ if [ "$SKIP_NOTARIZE" = false ]; then
 
     xcrun notarytool submit "$DMG_PATH" \
         --keychain-profile "$NOTARY_PROFILE" \
-        --wait 2>&1
+        --wait --verbose 2>&1
 
     step "Stapling notarization ticket"
     xcrun stapler staple "$DMG_PATH" 2>&1

@@ -387,5 +387,5 @@ Translation files in `translations/desktop_*.ts` (Qt Linguist format). Supported
   - No flags: full cleanup → build → sign → deploy → launch
   - --clean: cleanup only
   - --build: build → sign → deploy → launch (daily driver, preserves state)
-- Build workflow now includes re-sign + copy to /Applications/ as required steps
-- Mulch records updated with the finding
+
+tools/ship.sh --upload TAG
