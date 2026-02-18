@@ -493,7 +493,7 @@ void *FileProviderDomainManager::domainForAccount(const AccountState *accountSta
     if (!d) {
         return nullptr;
     }
-    return d->domainForAccount(accountState);
+    return (__bridge void *)d->domainForAccount(accountState);
 }
 
 void FileProviderDomainManager::removeAllDomains(bool waitForCompletion)
