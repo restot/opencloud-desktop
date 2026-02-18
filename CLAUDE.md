@@ -21,6 +21,8 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 Guidance for Claude Code working in this repository.
 
+### use sonet for explore sub-agent
+
 ## Project Overview
 
 OpenCloud Desktop is a Qt-based C++ desktop synchronization client for OpenCloud (Windows, macOS, Linux).

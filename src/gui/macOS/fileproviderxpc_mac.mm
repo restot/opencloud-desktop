@@ -295,13 +295,15 @@ void FileProviderXPC::connectToFileProviderDomains()
             dispatch_group_leave(group);
         }];
         
-        if (dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC)) != 0) {
-            NSLog(@"OpenCloud XPC: connectToFileProviderDomains timed out after 30 seconds");
-            qCWarning(lcFileProviderXPC) << "connectToFileProviderDomains timed out after 30 seconds";
-        }
+        // Non-blocking: authenticate all domains once connections are established.
+        // Using dispatch_group_wait here would block the Qt main thread, deadlocking
+        // against FileProvider completion handlers that also need the main thread.
+        dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+            qCInfo(lcFileProviderXPC) << "Connected to" << _clientCommServices.count() << "file provider domains";
+            NSLog(@"OpenCloud XPC: Connected to %d file provider domains", _clientCommServices.count());
+            authenticateFileProviderDomains();
+        });
     }
-
-    qCInfo(lcFileProviderXPC) << "Connected to" << _clientCommServices.count() << "file provider domains";
 }
 
 void FileProviderXPC::authenticateFileProviderDomains()
@@ -470,17 +472,23 @@ void FileProviderXPC::slotAccountStateChanged(AccountState::State state)
     qCDebug(lcFileProviderXPC) << "Account state changed for domain:" << domainId << "state:" << state;
 
     switch (state) {
-    case AccountState::Disconnected:
     case AccountState::SignedOut:
         unauthenticateFileProviderDomain(domainId);
         break;
+    case AccountState::Disconnected:
+        // Don't unauthenticate on transient disconnections (network hiccup,
+        // token refresh). The extension keeps working with cached credentials.
+        // Only SignedOut should remove credentials.
+        break;
     case AccountState::Connected:
-        // If we don't have an XPC connection for this domain, reconnect first
+        // If we don't have an XPC connection for this domain, reconnect all
+        // (connectToFileProviderDomains auto-authenticates when done)
         if (!_clientCommServices.contains(domainId)) {
             qCInfo(lcFileProviderXPC) << "No XPC connection for domain:" << domainId << "- reconnecting";
             connectToFileProviderDomains();
+        } else {
+            authenticateFileProviderDomain(domainId);
         }
-        authenticateFileProviderDomain(domainId);
         break;
     case AccountState::Connecting:
         // Do nothing while connecting
@@ -505,12 +513,13 @@ void FileProviderXPC::reconnectAfterInvalidation()
     }
     _clientCommServices.clear();
 
-    // Delay to allow the new extension process to start
+    // Delay to allow the new extension process to start.
+    // connectToFileProviderDomains is non-blocking and auto-authenticates
+    // when connections are established.
     QTimer::singleShot(3000, this, [this]() {
         _reconnectPending = false;
         qCInfo(lcFileProviderXPC) << "Reconnecting to FileProvider domains after invalidation";
         connectToFileProviderDomains();
-        authenticateFileProviderDomains();
     });
 }
 

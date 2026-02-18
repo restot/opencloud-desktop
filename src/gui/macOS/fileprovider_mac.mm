@@ -92,10 +92,11 @@ void FileProvider::configureXPC()
     
     qCInfo(lcFileProvider) << "Domain setup complete, configuring XPC connections";
     
-    // Give the system a moment to fully register the domains
+    // Give the system a moment to fully register the domains.
+    // connectToFileProviderDomains is non-blocking and auto-authenticates
+    // when connections are established.
     QTimer::singleShot(1000, this, [this]() {
         _xpc->connectToFileProviderDomains();
-        _xpc->authenticateFileProviderDomains();
     });
 }
 

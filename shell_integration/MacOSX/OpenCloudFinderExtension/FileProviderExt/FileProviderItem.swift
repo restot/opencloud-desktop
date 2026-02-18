@@ -44,15 +44,13 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
     private let _isUploading: Bool
     
     var capabilities: NSFileProviderItemCapabilities {
-        var caps: NSFileProviderItemCapabilities = []
+        var caps: NSFileProviderItemCapabilities = [.allowsReading]
         let perms = _permissions.uppercased()
 
-        // G = readable
-        if perms.contains("G") {
-            if contentType == .folder {
-                caps.insert(.allowsContentEnumerating)
-            }
-            caps.insert(.allowsReading)
+        // Reading is implicit in oc/oCIS: if PROPFIND returns the item, it's readable.
+        // Folders always need content enumeration.
+        if contentType == .folder {
+            caps.insert(.allowsContentEnumerating)
         }
 
         // D = deletable
@@ -76,14 +74,6 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
         // CK = folder allows adding sub-items
         if (perms.contains("C") || perms.contains("K")), contentType == .folder {
             caps.insert(.allowsAddingSubItems)
-        }
-
-        // Default fallback for items without permissions
-        if caps.isEmpty {
-            caps = [.allowsReading]
-            if contentType == .folder {
-                caps.insert(.allowsContentEnumerating)
-            }
         }
 
         // Downloaded files can be evicted (Remove Download in Finder)

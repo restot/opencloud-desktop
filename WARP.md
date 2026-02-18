@@ -381,3 +381,11 @@ When using Craft, files are organized as follows:
 ## Localization
 
 Translation files in `translations/desktop_*.ts` (Qt Linguist format). Supported languages: ar, de, en, fr, it, ko, nl, pt, ru, sv.
+
+### ultimate build 
+- ./tools/cleanup-fileprovider.sh into an all-in-one script with 3 modes:
+  - No flags: full cleanup → build → sign → deploy → launch
+  - --clean: cleanup only
+  - --build: build → sign → deploy → launch (daily driver, preserves state)
+- Build workflow now includes re-sign + copy to /Applications/ as required steps
+- Mulch records updated with the finding
