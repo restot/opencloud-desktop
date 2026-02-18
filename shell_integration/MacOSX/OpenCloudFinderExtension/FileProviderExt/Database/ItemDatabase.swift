@@ -251,26 +251,46 @@ actor ItemDatabase {
         }
     }
     
-    /// Delete directory and all its descendants
+    /// Delete directory and all its descendants using a recursive CTE in a single transaction
     func deleteDirectoryAndSubdirectories(ocId: String) throws {
-        // First, get all children recursively
-        var toDelete: [String] = [ocId]
-        var queue: [String] = [ocId]
-        
-        while !queue.isEmpty {
-            let parentId = queue.removeFirst()
-            let children = childItems(parentOcId: parentId)
-            for child in children {
-                toDelete.append(child.ocId)
-                if child.isDirectory {
-                    queue.append(child.ocId)
-                }
-            }
+        var errMsg: UnsafeMutablePointer<CChar>?
+        guard sqlite3_exec(db, "BEGIN", nil, nil, &errMsg) == SQLITE_OK else {
+            let error = errMsg != nil ? String(cString: errMsg!) : "Unknown error"
+            sqlite3_free(errMsg)
+            throw DatabaseError.deleteFailed("Failed to begin transaction: \(error)")
         }
-        
-        // Delete all items
-        for id in toDelete {
-            try deleteItemMetadata(ocId: id)
+
+        let sql = """
+            WITH RECURSIVE descendants(oc_id) AS (
+                SELECT oc_id FROM items WHERE oc_id = ?
+                UNION ALL
+                SELECT i.oc_id FROM items i
+                INNER JOIN descendants d ON i.parent_oc_id = d.oc_id
+            )
+            DELETE FROM items WHERE oc_id IN (SELECT oc_id FROM descendants)
+            """
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            let error = String(cString: sqlite3_errmsg(db))
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw DatabaseError.deleteFailed("Failed to prepare recursive delete: \(error)")
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_text(stmt, 1, ocId, -1, SQLITE_TRANSIENT)
+
+        if sqlite3_step(stmt) != SQLITE_DONE {
+            let error = String(cString: sqlite3_errmsg(db))
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw DatabaseError.deleteFailed("Failed to execute recursive delete: \(error)")
+        }
+
+        guard sqlite3_exec(db, "COMMIT", nil, nil, &errMsg) == SQLITE_OK else {
+            let error = errMsg != nil ? String(cString: errMsg!) : "Unknown error"
+            sqlite3_free(errMsg)
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw DatabaseError.deleteFailed("Failed to commit transaction: \(error)")
         }
     }
     
@@ -374,19 +394,25 @@ actor ItemDatabase {
     }
     
     // MARK: - Helpers
-    
+
+    /// Safe helper: returns empty string when sqlite3_column_text returns NULL
+    private func columnString(_ stmt: OpaquePointer?, _ col: Int32) -> String {
+        guard let ptr = sqlite3_column_text(stmt, col) else { return "" }
+        return String(cString: ptr)
+    }
+
     private func metadataFromRow(_ stmt: OpaquePointer?) -> ItemMetadata? {
         guard let stmt = stmt else { return nil }
         
         var col: Int32 = 0
         
-        let ocId = String(cString: sqlite3_column_text(stmt, col)); col += 1
-        let fileId = String(cString: sqlite3_column_text(stmt, col)); col += 1
-        let parentOcId = String(cString: sqlite3_column_text(stmt, col)); col += 1
-        let remotePath = String(cString: sqlite3_column_text(stmt, col)); col += 1
-        let filename = String(cString: sqlite3_column_text(stmt, col)); col += 1
-        let etag = String(cString: sqlite3_column_text(stmt, col)); col += 1
-        let contentType = String(cString: sqlite3_column_text(stmt, col)); col += 1
+        let ocId = columnString(stmt, col); col += 1
+        let fileId = columnString(stmt, col); col += 1
+        let parentOcId = columnString(stmt, col); col += 1
+        let remotePath = columnString(stmt, col); col += 1
+        let filename = columnString(stmt, col); col += 1
+        let etag = columnString(stmt, col); col += 1
+        let contentType = columnString(stmt, col); col += 1
         let size = sqlite3_column_int64(stmt, col); col += 1
         
         let lastModified: Date?
@@ -406,9 +432,9 @@ actor ItemDatabase {
         col += 1
         
         let isDirectory = sqlite3_column_int(stmt, col) != 0; col += 1
-        let permissions = String(cString: sqlite3_column_text(stmt, col)); col += 1
-        let ownerId = String(cString: sqlite3_column_text(stmt, col)); col += 1
-        let ownerDisplayName = String(cString: sqlite3_column_text(stmt, col)); col += 1
+        let permissions = columnString(stmt, col); col += 1
+        let ownerId = columnString(stmt, col); col += 1
+        let ownerDisplayName = columnString(stmt, col); col += 1
         let isDownloaded = sqlite3_column_int(stmt, col) != 0; col += 1
         let isDownloading = sqlite3_column_int(stmt, col) != 0; col += 1
         let isUploaded = sqlite3_column_int(stmt, col) != 0; col += 1
