@@ -222,7 +222,7 @@ void GETFileJob::slotReadyRead()
         if (_bandwidthLimited) {
             toRead = std::min<qint64>(bufferSize, _bandwidthQuota);
             if (toRead == 0) {
-                qCWarning(lcGetJob) << u"Out of badnwidth quota";
+                qCWarning(lcGetJob) << u"Out of bandwidth quota";
                 break;
             }
             _bandwidthQuota -= toRead;
