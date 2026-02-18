@@ -295,9 +295,12 @@ void FileProviderXPC::connectToFileProviderDomains()
             dispatch_group_leave(group);
         }];
         
-        dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+        if (dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC)) != 0) {
+            NSLog(@"OpenCloud XPC: connectToFileProviderDomains timed out after 30 seconds");
+            qCWarning(lcFileProviderXPC) << "connectToFileProviderDomains timed out after 30 seconds";
+        }
     }
-    
+
     qCInfo(lcFileProviderXPC) << "Connected to" << _clientCommServices.count() << "file provider domains";
 }
 
