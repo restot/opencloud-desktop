@@ -357,7 +357,7 @@ actor WebDAVClient {
             throw WebDAVError.permissionDenied
         case 404:
             throw WebDAVError.fileNotFound
-        case 412:
+        case 409, 412:
             throw WebDAVError.conflict
         case 507:
             throw WebDAVError.httpError(statusCode: 507, message: "Insufficient storage")

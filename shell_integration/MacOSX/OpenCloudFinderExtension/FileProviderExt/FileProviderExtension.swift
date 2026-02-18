@@ -12,9 +12,20 @@
  * for more details.
  */
 
+import CryptoKit
 import FileProvider
 import OSLog
 import UniformTypeIdentifiers
+
+/// SHA256 helper for file content comparison
+extension SHA256 {
+    /// Compute SHA256 of a file's contents, returning raw digest bytes
+    static func hash(contentsOf url: URL) -> Data? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let digest = SHA256.hash(data: data)
+        return Data(digest)
+    }
+}
 
 /// Main FileProvider extension class implementing NSFileProviderReplicatedExtension.
 /// This extension provides on-demand file sync capabilities for OpenCloud on macOS.
@@ -32,6 +43,8 @@ import UniformTypeIdentifiers
 
     private static var _sharedWebDAVClient: WebDAVClient?
     private static var _sharedIsAuthenticated = false
+    /// SHA256 of recently downloaded files to suppress re-upload on materialization ack
+    static var recentDownloadHashes: [String: Data] = [:]
     private static var _sharedServerUrl: String?
     private static var _sharedUsername: String?
     private static var _sharedUserId: String?
@@ -453,6 +466,11 @@ import UniformTypeIdentifiers
                 let item = FileProviderItem(metadata: updatedMetadata, parentItemIdentifier: parentId)
                 NSLog("[FetchContents] Done: file=%@, diskSize=%lld, itemSize=%@, isDownloaded=%d", metadata.filename, fileSize, item.documentSize ?? NSNumber(value: -1), item.isDownloaded)
 
+                // Record content hash to suppress re-upload on materialization ack
+                if let hash = SHA256.hash(contentsOf: tempFile) {
+                    Self.recentDownloadHashes[metadata.ocId] = hash
+                }
+
                 progress.completedUnitCount = 100
                 completionHandler(tempFile, item, nil)
 
@@ -505,6 +523,10 @@ import UniformTypeIdentifiers
                                 ? NSFileProviderItemIdentifier.rootContainer
                                 : NSFileProviderItemIdentifier(updatedMetadata.parentOcId)
                             let item = FileProviderItem(metadata: updatedMetadata, parentItemIdentifier: parentId)
+
+                            if let hash = SHA256.hash(contentsOf: retryFile) {
+                                Self.recentDownloadHashes[metadata.ocId] = hash
+                            }
 
                             progress.completedUnitCount = 100
                             completionHandler(retryFile, item, nil)
@@ -681,39 +703,46 @@ import UniformTypeIdentifiers
             do {
                 // Handle content changes (upload new content)
                 if let newContents = newContents, changedFields.contains(.contents) {
-                    // Skip re-upload if item was just downloaded and content matches
-                    // (system calls modifyItem after fetchContents to acknowledge materialization)
+                    // After fetchContents, macOS may call modifyItem(.contents) to acknowledge
+                    // materialization. Detect this by comparing SHA256 of the new content with
+                    // the hash recorded at download time — only skip if content is identical.
                     let shouldUpload: Bool
-                    if metadata.isDownloaded {
-                        let localSize = (try? FileManager.default.attributesOfItem(atPath: newContents.path))?[.size] as? Int64 ?? -1
-                        shouldUpload = localSize != metadata.size
-                        if !shouldUpload {
-                            self.logger.info("Skipping re-upload for just-downloaded item: \(item.filename)")
-                        }
+                    let contentHash = SHA256.hash(contentsOf: newContents)
+                    let downloadHash = Self.recentDownloadHashes[metadata.ocId]
+
+                    if let dh = downloadHash, let ch = contentHash, dh == ch {
+                        shouldUpload = false
+                        Self.recentDownloadHashes.removeValue(forKey: metadata.ocId)
+                        self.logger.info("Skipping re-upload (hash match) for: \(item.filename)")
                     } else {
                         shouldUpload = true
+                        Self.recentDownloadHashes.removeValue(forKey: metadata.ocId)
                     }
 
                     if shouldUpload {
+                        // Try with If-Match ETag first for safe concurrency,
+                        // then retry without it on 409/412 (stale ETag from enumeration).
+                        let etag = metadata.etag.isEmpty ? nil : metadata.etag
+                        var uploaded = false
+
                         do {
-                            let etag = metadata.etag.isEmpty ? nil : metadata.etag
                             if let updatedItem = try await webdav.uploadFile(from: newContents, to: metadata.remotePath, ifMatchEtag: etag, progress: progress) {
                                 metadata = ItemMetadata(from: updatedItem, parentOcId: metadata.parentOcId)
                             }
-                            metadata.isUploaded = true
-                            metadata.isDownloaded = true
+                            uploaded = true
                         } catch WebDAVError.conflict {
-                            self.logger.warning("Conflict detected for \(item.filename): server version changed")
-                            if let serverItems = try? await webdav.listDirectory(path: metadata.remotePath),
-                               let serverItem = serverItems.first {
-                                var serverMetadata = ItemMetadata(from: serverItem, parentOcId: metadata.parentOcId)
-                                serverMetadata.isDownloaded = false
-                                try await database.addItemMetadata(serverMetadata)
-                            }
-                            self.signalEnumerator()
-                            completionHandler(item, [], false, NSFileProviderError(.cannotSynchronize))
-                            return
+                            self.logger.warning("ETag conflict uploading \(item.filename), retrying without If-Match")
                         }
+
+                        if !uploaded {
+                            // Retry without If-Match — user edited locally, force overwrite
+                            if let updatedItem = try await webdav.uploadFile(from: newContents, to: metadata.remotePath, ifMatchEtag: nil, progress: progress) {
+                                metadata = ItemMetadata(from: updatedItem, parentOcId: metadata.parentOcId)
+                            }
+                        }
+
+                        metadata.isUploaded = true
+                        metadata.isDownloaded = true
                     }
                 }
 
@@ -752,17 +781,16 @@ import UniformTypeIdentifiers
                 // Update database
                 try await database.addItemMetadata(metadata)
 
-                // Fields we don't handle — return them as still pending so the
-                // system doesn't keep calling modifyItem for unhandled metadata.
-                let handledFields: NSFileProviderItemFields = [.contents, .filename, .parentItemIdentifier]
-                let stillPending = changedFields.subtracting(handledFields)
-
+                // Return empty stillPending — unhandled metadata fields (e.g.
+                // contentModificationDate) are implicitly synced when content is
+                // uploaded.  Returning them as pending blocks eviction because the
+                // system thinks there are unsynced local changes.
                 let updatedItem = FileProviderItem(metadata: metadata, parentItemIdentifier: item.parentItemIdentifier)
                 progress.completedUnitCount = 100
-                completionHandler(updatedItem, stillPending, false, nil)
+                completionHandler(updatedItem, [], false, nil)
 
             } catch {
-                logger.error("Modify failed: \(error.localizedDescription)")
+                logger.error("Modify failed for \(item.filename): \(error.localizedDescription)")
                 completionHandler(item, [], false, error)
             }
         }
