@@ -68,7 +68,15 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
         let passwordPreview = password.isEmpty ? "(empty)" : "(\(password.count) chars)"
         NSLog("[FileProviderExt] configureAccount: user=%@, serverUrl=%@, password=%@, davPath=%@", user, serverUrl, passwordPreview, davPath)
         logger.info("Received account configuration over XPC for user: \(user) at server: \(serverUrl) davPath: \(davPath)")
-        fpExtension.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath)
+        // Legacy method: main app always sends OAuth access tokens, so always use bearer
+        fpExtension.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath, authType: "bearer")
+    }
+
+    func configureAccount(withUser user: String, userId: String, serverUrl: String, password: String, davPath: String, authType: String) {
+        let passwordPreview = password.isEmpty ? "(empty)" : "(\(password.count) chars)"
+        NSLog("[FileProviderExt] configureAccount(authType=%@): user=%@, serverUrl=%@, password=%@, davPath=%@", authType, user, serverUrl, passwordPreview, davPath)
+        logger.info("Received account configuration over XPC for user: \(user) at server: \(serverUrl) davPath: \(davPath) authType: \(authType)")
+        fpExtension.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath, authType: authType)
     }
     
     func removeAccountConfig() {
