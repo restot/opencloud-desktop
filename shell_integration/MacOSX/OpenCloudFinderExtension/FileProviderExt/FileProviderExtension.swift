@@ -228,15 +228,17 @@ import UniformTypeIdentifiers
     private static let credKeyServer = "fp_credential_server"
     private static let credKeyPassword = "fp_credential_password"
     private static let credKeyDavPath = "fp_credential_davPath"
+    private static let credKeyAuthType = "fp_credential_authType"
 
     /// Save credentials to UserDefaults in the shared container for cross-restart persistence
-    private func persistCredentials(user: String, userId: String, serverUrl: String, password: String, davPath: String) {
+    private func persistCredentials(user: String, userId: String, serverUrl: String, password: String, davPath: String, authType: String = "bearer") {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
         defaults.set(user, forKey: Self.credKeyUser)
         defaults.set(userId, forKey: Self.credKeyUserId)
         defaults.set(serverUrl, forKey: Self.credKeyServer)
         defaults.set(password, forKey: Self.credKeyPassword)
         defaults.set(davPath, forKey: Self.credKeyDavPath)
+        defaults.set(authType, forKey: Self.credKeyAuthType)
         defaults.synchronize()
         NSLog("[FileProviderExt] Credentials persisted to UserDefaults")
     }
@@ -252,9 +254,11 @@ import UniformTypeIdentifiers
             return
         }
         let davPath = defaults.string(forKey: Self.credKeyDavPath) ?? ""
+        // Default to "bearer" for entries persisted before authType was added
+        let authType = defaults.string(forKey: Self.credKeyAuthType) ?? "bearer"
 
         NSLog("[FileProviderExt] Restoring credentials from UserDefaults for user=%@", user)
-        setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath)
+        setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath, authType: authType)
     }
 
     /// Clear persisted credentials
@@ -265,6 +269,7 @@ import UniformTypeIdentifiers
         defaults.removeObject(forKey: Self.credKeyServer)
         defaults.removeObject(forKey: Self.credKeyPassword)
         defaults.removeObject(forKey: Self.credKeyDavPath)
+        defaults.removeObject(forKey: Self.credKeyAuthType)
         defaults.synchronize()
     }
 
@@ -862,9 +867,9 @@ import UniformTypeIdentifiers
     }
     
     /// Called by ClientCommunicationService when main app sends account credentials
-    func setupDomainAccount(user: String, userId: String, serverUrl: String, password: String, davPath: String = "") {
-        NSLog("[FileProviderExt] setupDomainAccount: user=%@, server=%@, password=%d chars, davPath=%@", user, serverUrl, password.count, davPath)
-        logger.info("Setting up account for user: \(user) at server: \(serverUrl) davPath: \(davPath)")
+    func setupDomainAccount(user: String, userId: String, serverUrl: String, password: String, davPath: String = "", authType: String = "bearer") {
+        NSLog("[FileProviderExt] setupDomainAccount: user=%@, server=%@, password=%d chars, davPath=%@, authType=%@", user, serverUrl, password.count, davPath, authType)
+        logger.info("Setting up account for user: \(user) at server: \(serverUrl) davPath: \(davPath) authType: \(authType)")
 
         guard !password.isEmpty else {
             NSLog("[FileProviderExt] Ignoring account configuration with empty password")
@@ -887,9 +892,8 @@ import UniformTypeIdentifiers
         // Use the davPath provided by the main app, fall back to legacy path
         let resolvedDavPath = davPath.isEmpty ? "/remote.php/webdav" : davPath
 
-        // Determine auth type: OAuth tokens are typically longer than regular passwords
-        // and don't contain special characters like passwords might
-        let useBearer = password.count > 100 || password.hasPrefix("ey")  // JWT tokens start with "ey"
+        // Use explicit auth type from caller; treat anything other than "basic" as bearer
+        let useBearer = authType.lowercased() != "basic"
 
         NSLog("[FileProviderExt] Creating WebDAV client: url=%@, davPath=%@, useBearer=%d", url.absoluteString, resolvedDavPath, useBearer)
         self.webdavClient = WebDAVClient(serverURL: url, davPath: resolvedDavPath, username: user, password: password, useBearer: useBearer)
@@ -899,7 +903,7 @@ import UniformTypeIdentifiers
         logger.info("WebDAV client created for \(url.absoluteString)\(resolvedDavPath)")
 
         // Persist for cross-restart and cross-instance availability
-        persistCredentials(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: resolvedDavPath)
+        persistCredentials(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: resolvedDavPath, authType: authType)
 
         // Signal that we're ready to enumerate with real data
         signalEnumerator()

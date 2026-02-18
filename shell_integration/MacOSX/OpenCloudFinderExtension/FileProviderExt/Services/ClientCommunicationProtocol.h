@@ -39,6 +39,18 @@
                          davPath:(NSString *)davPath;
 
 /**
+ * Configure account credentials with explicit authentication type.
+ * @param davPath The WebDAV path on the server (e.g., "/dav/spaces/<spaceId>" or "/remote.php/webdav")
+ * @param authType The authentication type: "bearer" for OAuth tokens, "basic" for username/password
+ */
+- (void)configureAccountWithUser:(NSString *)user
+                          userId:(NSString *)userId
+                       serverUrl:(NSString *)serverUrl
+                        password:(NSString *)password
+                         davPath:(NSString *)davPath
+                        authType:(NSString *)authType;
+
+/**
  * Remove account configuration (e.g., on sign out).
  */
 - (void)removeAccountConfig;
