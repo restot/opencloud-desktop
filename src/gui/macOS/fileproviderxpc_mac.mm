@@ -386,6 +386,9 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
         qCInfo(lcFileProviderXPC) << "No personal space found, extension will use legacy /remote.php/webdav";
     }
 
+    // Current code only reaches here for HttpCredentials with a valid OAuth access token
+    NSString *authType = @"bearer";
+
     // Get the service proxy
     void *servicePtr = _clientCommServices.value(domainIdentifier);
     if (!servicePtr) {
@@ -396,17 +399,27 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
 
     NSObject<ClientCommunicationProtocol> *service = (NSObject<ClientCommunicationProtocol> *)servicePtr;
 
-    NSLog(@"OpenCloud XPC: Calling configureAccountWithUser:%@ serverUrl:%@ password:(%lu chars) davPath:%@", user, serverUrl, (unsigned long)password.length, davPath);
+    NSLog(@"OpenCloud XPC: Calling configureAccountWithUser:%@ serverUrl:%@ password:(%lu chars) davPath:%@ authType:%@", user, serverUrl, (unsigned long)password.length, davPath, authType);
     qCInfo(lcFileProviderXPC) << "Sending credentials to domain:" << domainIdentifier
                               << "user:" << QString::fromNSString(user)
                               << "server:" << QString::fromNSString(serverUrl)
-                              << "davPath:" << QString::fromNSString(davPath);
+                              << "davPath:" << QString::fromNSString(davPath)
+                              << "authType:" << QString::fromNSString(authType);
 
-    [service configureAccountWithUser:user
-                               userId:userId
-                            serverUrl:serverUrl
-                             password:password
-                              davPath:davPath];
+    if ([service respondsToSelector:@selector(configureAccountWithUser:userId:serverUrl:password:davPath:authType:)]) {
+        [service configureAccountWithUser:user
+                                   userId:userId
+                                serverUrl:serverUrl
+                                 password:password
+                                  davPath:davPath
+                                 authType:authType];
+    } else {
+        [service configureAccountWithUser:user
+                                   userId:userId
+                                serverUrl:serverUrl
+                                 password:password
+                                  davPath:davPath];
+    }
 }
 
 void FileProviderXPC::unauthenticateFileProviderDomain(const QString &domainIdentifier)
