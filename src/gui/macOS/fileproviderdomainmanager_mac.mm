@@ -129,7 +129,10 @@ public:
             dispatch_group_leave(group);
         }];
 
-        dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+        if (dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC)) != 0) {
+            NSLog(@"[FPDomainManager] findExistingFileProviderDomains timed out after 30 seconds");
+            qCWarning(lcFileProviderDomainManager) << "findExistingFileProviderDomains timed out after 30 seconds";
+        }
     }
 
     NSFileProviderDomain *domainForAccount(const AccountState *accountState)
@@ -318,8 +321,11 @@ public:
                 }];
             }
 
-            dispatch_group_wait(removeGroup, DISPATCH_TIME_FOREVER);
-            
+            if (dispatch_group_wait(removeGroup, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC)) != 0) {
+                NSLog(@"[FPDomainManager] removeAllDomains remove group timed out after 30 seconds");
+                qCWarning(lcFileProviderDomainManager) << "removeAllDomains: remove group timed out after 30 seconds";
+            }
+
             // Clear our internal state
             for (auto *domain : _registeredDomains.values()) {
                 if (domain) {
@@ -332,9 +338,13 @@ public:
         }];
 
         if (waitForCompletion) {
-            dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
-            qCInfo(lcFileProviderDomainManager) << "All domains removed";
-            NSLog(@"[FPDomainManager] All domains removed");
+            if (dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC)) != 0) {
+                NSLog(@"[FPDomainManager] removeAllDomains outer group timed out after 30 seconds");
+                qCWarning(lcFileProviderDomainManager) << "removeAllDomains: outer group timed out after 30 seconds";
+            } else {
+                qCInfo(lcFileProviderDomainManager) << "All domains removed";
+                NSLog(@"[FPDomainManager] All domains removed");
+            }
         }
     }
 
