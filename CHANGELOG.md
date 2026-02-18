@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.2](https://github.com/restot/opencloud-desktop/releases/tag/v0.2) - 2026-02-18
+
+### 🍎 macOS FileProvider VFS
+
+Initial implementation of macOS FileProvider integration, enabling native Finder integration with OpenCloud via the FileProvider framework.
+
+### 🐛 Bug Fixes
+
+- Fix non-blocking XPC connection: use `dispatch_group_notify` instead of `dispatch_group_wait` to avoid deadlocking the Qt main thread [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+- Don't disconnect/unauthenticate FileProvider domain on transient `Disconnected` state — network hiccups cause rapid state cycling that disables the extension [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+- Don't clear registered domains on `removeAllDomains` timeout to prevent duplicate domain registrations [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+- Fix `dispatch_group_wait` indefinite blocking in XPC connection setup [[c191763dd](https://github.com/restot/opencloud-desktop/commit/c191763dd)]
+- Fix NULL crash and O(n) recursive delete in ItemDatabase [[daa8cb6ee](https://github.com/restot/opencloud-desktop/commit/daa8cb6ee)]
+- Fix ARC bridging cast errors in FileProvider .mm files [[8e2142118](https://github.com/restot/opencloud-desktop/commit/8e2142118)]
+- Correct bandwidth typo and revert propagator to unique_ptr [[c29d24c1d](https://github.com/restot/opencloud-desktop/commit/c29d24c1d)]
+
+### 📈 Enhancement
+
+- FileProvider item capabilities: reading is always implicit for PROPFIND-returned items; folders always get content enumeration [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+- Add explicit `authType` (bearer/basic) to XPC credential protocol [[e3666c957](https://github.com/restot/opencloud-desktop/commit/e3666c957), [8c66ef5e5](https://github.com/restot/opencloud-desktop/commit/8c66ef5e5)]
+- Auto-authenticate FileProvider domains after XPC connections are established [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+- Enable ARC for all FileProvider .mm files [[49986a4bb](https://github.com/restot/opencloud-desktop/commit/49986a4bb)]
+- Set `DEVELOPMENT_TEAM` in Xcode project for all targets [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+
+### 🔧 Tooling
+
+- Add `tools/cleanup-fileprovider.sh`: all-in-one cleanup, build, sign, and deploy script with `--clean` and `--build` modes
+
 ## [3.0.0](https://github.com/opencloud-eu/desktop/releases/tag/v3.0.0) - 2025-11-25
 
 ### ❤️ Thanks to all contributors! ❤️
