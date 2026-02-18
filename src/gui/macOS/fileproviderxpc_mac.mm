@@ -394,7 +394,7 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
         return;
     }
 
-    NSObject<ClientCommunicationProtocol> *service = (NSObject<ClientCommunicationProtocol> *)servicePtr;
+    NSObject<ClientCommunicationProtocol> *service = (__bridge NSObject<ClientCommunicationProtocol> *)servicePtr;
 
     NSLog(@"OpenCloud XPC: Calling configureAccountWithUser:%@ serverUrl:%@ password:(%lu chars) davPath:%@", user, serverUrl, (unsigned long)password.length, davPath);
     qCInfo(lcFileProviderXPC) << "Sending credentials to domain:" << domainIdentifier
@@ -419,7 +419,7 @@ void FileProviderXPC::unauthenticateFileProviderDomain(const QString &domainIden
         return;
     }
     
-    NSObject<ClientCommunicationProtocol> *service = (NSObject<ClientCommunicationProtocol> *)servicePtr;
+    NSObject<ClientCommunicationProtocol> *service = (__bridge NSObject<ClientCommunicationProtocol> *)servicePtr;
     [service removeAccountConfig];
 }
 
@@ -430,7 +430,7 @@ bool FileProviderXPC::fileProviderDomainReachable(const QString &domainIdentifie
         return false;
     }
     
-    NSObject<ClientCommunicationProtocol> *service = (NSObject<ClientCommunicationProtocol> *)servicePtr;
+    NSObject<ClientCommunicationProtocol> *service = (__bridge NSObject<ClientCommunicationProtocol> *)servicePtr;
     
     __block BOOL reachable = NO;
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
