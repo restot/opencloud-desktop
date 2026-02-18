@@ -187,22 +187,56 @@ copy_framework() {
     return 0
 }
 
-# Collect all unique @rpath deps from all Mach-O binaries in a directory
+# Collect all deps: both @rpath and absolute Craft paths
 collect_deps() {
     local dir="$1"
     local deps=""
     while IFS= read -r bin; do
         local bin_deps
+        # @rpath deps → strip prefix
         bin_deps=$(otool -L "$bin" 2>/dev/null | grep '@rpath/' | awk '{print $1}' | sed 's|@rpath/||' || true)
         if [ -n "$bin_deps" ]; then
             deps="$deps"$'\n'"$bin_deps"
+        fi
+        # Absolute Craft lib paths → extract basename
+        bin_deps=$(otool -L "$bin" 2>/dev/null | grep "$HOME/Documents/craft/" | awk '{print $1}' || true)
+        if [ -n "$bin_deps" ]; then
+            while IFS= read -r abspath; do
+                deps="$deps"$'\n'"$(basename "$abspath")"
+            done <<< "$bin_deps"
         fi
     done < <(find "$dir" -type f -exec sh -c 'file "$1" 2>/dev/null | grep -q "Mach-O"' _ {} \; -print)
     echo "$deps" | sort -u | grep -v '^$' || true
 }
 
-# Iteratively resolve until stable
-for pass in 1 2 3 4 5; do
+RPATH_NEW="@executable_path/../Frameworks"
+
+# Rewrite absolute paths and rpaths on all Mach-O binaries in the staged app
+fix_paths() {
+    while IFS= read -r bin; do
+        # Remove old absolute rpaths (LC_RPATH entries)
+        for old_rpath in $(otool -l "$bin" 2>/dev/null | grep -A2 LC_RPATH | grep 'path /Users' | awk '{print $2}' || true); do
+            install_name_tool -delete_rpath "$old_rpath" "$bin" 2>/dev/null || true
+        done
+        # Rewrite absolute Craft lib paths in LC_LOAD_DYLIB to @rpath/name
+        for abs_dep in $(otool -L "$bin" 2>/dev/null | grep "$HOME/Documents/craft/" | awk '{print $1}' || true); do
+            local_name=$(basename "$abs_dep")
+            install_name_tool -change "$abs_dep" "@rpath/$local_name" "$bin" 2>/dev/null || true
+        done
+        # Rewrite the library's own install name if it's an absolute craft path
+        old_id=$(otool -D "$bin" 2>/dev/null | tail -1 || true)
+        if [[ "$old_id" == *"/Documents/craft/"* ]]; then
+            install_name_tool -id "@rpath/$(basename "$old_id")" "$bin" 2>/dev/null || true
+        fi
+        # Add @executable_path/../Frameworks if missing
+        if ! otool -l "$bin" 2>/dev/null | grep -q "$RPATH_NEW"; then
+            install_name_tool -add_rpath "$RPATH_NEW" "$bin" 2>/dev/null || true
+        fi
+    done < <(find "$STAGE_APP" -type f -exec sh -c 'file "$1" 2>/dev/null | grep -q "Mach-O"' _ {} \; -print)
+}
+
+# Iteratively: copy deps → fix paths → check for new deps → repeat
+for pass in 1 2 3 4 5 6 7 8; do
     deps=$(collect_deps "$STAGE_APP")
     [ -z "$deps" ] && break
 
@@ -215,8 +249,12 @@ for pass in 1 2 3 4 5; do
         fi
     done <<< "$deps"
 
-    # Check for unresolved
+    # Fix paths after each copy pass so newly copied libs get rewritten
+    fix_paths
+
+    # Check for unresolved @rpath deps (absolute paths already rewritten)
     missing=""
+    new_deps=$(collect_deps "$STAGE_APP")
     while IFS= read -r dep; do
         [ -z "$dep" ] && continue
         if [[ "$dep" == *.framework/* ]]; then
@@ -224,35 +262,17 @@ for pass in 1 2 3 4 5; do
         else
             [ ! -f "$FW_DIR/$dep" ] && [ ! -L "$FW_DIR/$dep" ] && missing="$missing $dep"
         fi
-    done <<< "$deps"
+    done <<< "$new_deps"
 
     if [ -z "$missing" ]; then
         echo "  All dependencies resolved (pass $pass)"
         break
     fi
 
-    if [ "$pass" -eq 5 ]; then
-        echo "  WARNING: Unresolved after 5 passes:$missing"
+    if [ "$pass" -eq 8 ]; then
+        echo "  WARNING: Unresolved after 8 passes:$missing"
     fi
 done
-
-# ─── FIX RPATHS ─────────────────────────────────────────────────────────────
-
-step "Fixing rpaths"
-
-RPATH_NEW="@executable_path/../Frameworks"
-
-while IFS= read -r bin; do
-    # Remove old absolute rpaths
-    for old_rpath in $(otool -l "$bin" 2>/dev/null | grep -A2 LC_RPATH | grep 'path /Users' | awk '{print $2}' || true); do
-        install_name_tool -delete_rpath "$old_rpath" "$bin" 2>/dev/null || true
-    done
-    # Add @executable_path/../Frameworks if missing
-    if ! otool -l "$bin" 2>/dev/null | grep -q "$RPATH_NEW"; then
-        install_name_tool -add_rpath "$RPATH_NEW" "$bin" 2>/dev/null || true
-    fi
-done < <(find "$STAGE_APP" -type f -exec sh -c 'file "$1" 2>/dev/null | grep -q "Mach-O"' _ {} \; -print)
-echo "  Done"
 
 # ─── CODESIGN ────────────────────────────────────────────────────────────────
 
