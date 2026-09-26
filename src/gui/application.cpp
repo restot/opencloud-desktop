@@ -329,6 +329,12 @@ void Application::runNewAccountWizard()
                     // the account is now ready, emulate a normal account loading and Q_EMIT that the credentials are ready
                     Q_EMIT accountStatePtr->account()->credentialsFetched();
 
+                    if (FolderMan::instance()->useFileProvider()) {
+                        accountStatePtr->setSettingUp(false);
+                        accountStatePtr->checkConnectivity();
+                        return;
+                    }
+
                     switch (syncMode) {
                     case Wizard::SyncMode::SyncEverything:
                     case Wizard::SyncMode::UseVfs: {

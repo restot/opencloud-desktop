@@ -12,12 +12,17 @@
  * for more details.
  */
 
+#include "gui/folderman.h"
 #include "macOS/fileprovider.h"
 #include "macOS/fileproviderdomainmanager.h"
 #include "macOS/fileproviderxpc.h"
 
+#include <QEventLoop>
+#include <QFutureWatcher>
 #include <QLoggingCategory>
+#include <QPromise>
 #include <QTimer>
+#include <QVersionNumber>
 
 #import <FileProvider/FileProvider.h>
 
@@ -41,12 +46,11 @@ FileProvider::FileProvider(QObject *parent)
 {
     NSLog(@"OpenCloud: FileProvider::FileProvider() called");
     qCInfo(lcFileProvider) << "Initializing FileProvider integration";
-    
-    if (!fileProviderAvailable()) {
-        qCWarning(lcFileProvider) << "FileProvider not available on this system";
+
+    if (!FolderMan::instance()->useFileProvider()) {
         return;
     }
-    
+
     // Create the domain manager
     _domainManager = std::make_unique<FileProviderDomainManager>(this);
     
@@ -69,9 +73,71 @@ FileProvider::~FileProvider()
 bool FileProvider::fileProviderAvailable()
 {
     if (@available(macOS 11.0, *)) {
-        return true;
+        NSURL *extensionURL = [NSBundle.mainBundle.builtInPlugInsURL URLByAppendingPathComponent:@"FileProviderExt.appex"];
+        NSBundle *extension = [NSBundle bundleWithURL:extensionURL];
+        if (!extension || ![NSFileManager.defaultManager isExecutableFileAtPath:extension.executablePath]) {
+            return false;
+        }
+        const auto minimumVersion = QVersionNumber::fromString(QString::fromNSString([extension objectForInfoDictionaryKey:@"LSMinimumSystemVersion"]));
+        const auto version = NSProcessInfo.processInfo.operatingSystemVersion;
+        return QVersionNumber(version.majorVersion, version.minorVersion, version.patchVersion) >= minimumVersion;
     }
     return false;
+}
+
+Result<void, QString> FileProvider::prepareForFolderSync()
+{
+    if (!fileProviderAvailable()) {
+        return {};
+    }
+
+    // Keep the main event loop responsive while macOS disconnects the domains.
+    // The shared promise also keeps late completion handlers safe after a timeout.
+    auto promise = std::make_shared<QPromise<QString>>();
+    promise->start();
+    QFutureWatcher<QString> watcher;
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&watcher, &QFutureWatcher<QString>::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    watcher.setFuture(promise->future());
+    NSString *reason = tr("Traditional folder sync is enabled. Switch to on-demand files in Settings to reconnect.").toNSString();
+    [NSFileProviderManager getDomainsWithCompletionHandler:^(NSArray<NSFileProviderDomain *> *domains, NSError *error) {
+        if (error) {
+            promise->addResult(QString::fromNSString(error.localizedDescription));
+            promise->finish();
+            return;
+        }
+        dispatch_group_t group = dispatch_group_create();
+        for (NSFileProviderDomain *domain in domains) {
+            NSFileProviderManager *manager = [NSFileProviderManager managerForDomain:domain];
+            if (!manager) {
+                promise->addResult(tr("Could not disconnect on-demand files for %1.").arg(QString::fromNSString(domain.displayName)));
+                continue;
+            }
+            dispatch_group_enter(group);
+            [manager disconnectWithReason:reason
+                                  options:0
+                        completionHandler:^(NSError *disconnectError) {
+                            if (disconnectError) {
+                                promise->addResult(QString::fromNSString(disconnectError.localizedDescription));
+                            }
+                            dispatch_group_leave(group);
+                        }];
+        }
+        dispatch_group_notify(group, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{ promise->finish(); });
+    }];
+    timeout.start(std::chrono::seconds(30));
+    loop.exec();
+    if (!watcher.isFinished()) {
+        return tr("Timed out while disconnecting on-demand files. Traditional folder sync has not started.");
+    }
+    const auto errors = watcher.future().results();
+    if (!errors.isEmpty()) {
+        return QStringList(errors).join(QLatin1Char('\n'));
+    }
+    return {};
 }
 
 FileProviderDomainManager *FileProvider::domainManager() const

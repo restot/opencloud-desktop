@@ -26,9 +26,14 @@
 #include "libsync/configfile.h"
 #include "libsync/theme.h"
 
+#ifdef Q_OS_MAC
+#include "macOS/fileprovider.h"
+#endif
+
 #include <QMessageBox>
 #include <QOperatingSystemVersion>
 #include <QScopedValueRollback>
+#include <QSignalBlocker>
 
 Q_LOGGING_CATEGORY(lcGeneralSettings, "gui.generalsettings", QtInfoMsg)
 namespace OCC {
@@ -81,10 +86,22 @@ GeneralSettings::GeneralSettings(QWidget *parent)
     connect(_ui->about_pushButton, &QPushButton::clicked, ocApp(), &Application::showAbout);
 
 #ifdef Q_OS_MAC
+    const bool onDemandAvailable = Mac::FileProvider::fileProviderAvailable();
+    _ui->traditionalFolderSyncCheckBox->setEnabled(onDemandAvailable);
+    if (!onDemandAvailable) {
+        _ui->syncModeDescription->setText(tr("On-demand files are not available in this installation. Traditional folder sync is active."));
+    }
+    connect(_ui->traditionalFolderSyncCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
+        ConfigFile().setTraditionalFolderSync(checked);
+        _ui->restartSyncModeButton->setVisible(checked == FolderMan::instance()->useFileProvider());
+    });
+    connect(_ui->restartSyncModeButton, &QPushButton::clicked, this, &RestartManager::requestRestart);
+
     // macOS Finder extension management button
     connect(_ui->finderExtensionButton, &QPushButton::clicked, this, []() { Utility::showFinderSyncExtensionManagementInterface(); });
     updateFinderExtensionButton();
 #else
+    _ui->macSyncModeGroupBox->hide();
     // Hide the Finder extension button on non-macOS platforms
     _ui->finderExtensionButton->setVisible(false);
 #endif
@@ -144,6 +161,13 @@ void GeneralSettings::slotIgnoreFilesEditor()
 
 void GeneralSettings::reloadConfig()
 {
+#ifdef Q_OS_MAC
+    const QSignalBlocker blocker(_ui->traditionalFolderSyncCheckBox);
+    const bool traditional = ConfigFile().traditionalFolderSync();
+    const bool available = Mac::FileProvider::fileProviderAvailable();
+    _ui->traditionalFolderSyncCheckBox->setChecked(traditional || !available);
+    _ui->restartSyncModeButton->setVisible(available && traditional == FolderMan::instance()->useFileProvider());
+#endif
     _ui->syncHiddenFilesCheckBox->setChecked(!FolderMan::instance()->ignoreHiddenFiles());
     _ui->moveToTrashCheckBox->setChecked(ConfigFile().moveToTrash());
     if (Utility::isWindows() && Utility::isInstalledByStore()) {

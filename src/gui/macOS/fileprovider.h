@@ -14,6 +14,9 @@
 
 #pragma once
 
+#include "gui/opencloudguilib.h"
+#include "libsync/common/result.h"
+
 #include <QObject>
 #include <memory>
 
@@ -33,7 +36,7 @@ namespace Mac {
      * communication with the FileProvider extension. It should be started
      * after the AccountManager has loaded accounts.
      */
-    class FileProvider : public QObject
+    class OPENCLOUD_GUI_EXPORT FileProvider : public QObject
     {
         Q_OBJECT
 
@@ -45,6 +48,9 @@ namespace Mac {
          * @brief Check if FileProvider is available on this system.
          */
         static bool fileProviderAvailable();
+
+        /// Disconnect existing domains before traditional folder sync can start.
+        static Result<void, QString> prepareForFolderSync();
 
         /**
          * @brief Get the domain manager.

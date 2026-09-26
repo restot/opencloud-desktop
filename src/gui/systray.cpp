@@ -110,6 +110,10 @@ void Systray::slotComputeOverallSyncStatus()
         setIcon(getIconFromStatus(SyncResult::Status::Offline));
         setToolTip(tr("Please sign in"));
         return;
+    } else if (FolderMan::instance()->useFileProvider()) {
+        setIcon(getIconFromStatus(SyncResult::Success));
+        setToolTip(tr("On-demand files in Finder"));
+        return;
     } else if (allPaused) {
         setIcon(getIconFromStatus(SyncResult::Paused));
         setToolTip(tr("Account synchronization is disabled"));
@@ -145,6 +149,7 @@ void Systray::computeContextMenu()
 
     menu->addAction(Theme::instance()->applicationIcon(), tr("Show %1").arg(Theme::instance()->appNameGUI()), ocApp(), &Application::showSettings);
     auto *pauseResume = new QAction(menu);
+    pauseResume->setVisible(!FolderMan::instance()->useFileProvider());
     auto updatePauseResumeAction = [pauseResume] {
         pauseResume->setText(FolderMan::instance()->scheduler()->isRunning() ? tr("Pause synchronizations") : tr("Resume synchronizations"));
     };

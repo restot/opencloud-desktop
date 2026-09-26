@@ -156,6 +156,9 @@ void AccountSettings::showSelectiveSyncDialog(Folder *folder)
 
 void AccountSettings::slotAddFolder()
 {
+    if (useFileProvider()) {
+        return;
+    }
     FolderMan::instance()->setSyncEnabled(false); // do not start more syncs.
 
     FolderWizard *folderWizard = new FolderWizard(_accountState, this);
@@ -168,6 +171,11 @@ void AccountSettings::slotAddFolder()
     });
 
     addModalLegacyDialog(folderWizard, AccountSettings::ModalWidgetSizePolicy::Expanding);
+}
+
+bool AccountSettings::useFileProvider() const
+{
+    return FolderMan::instance()->useFileProvider();
 }
 
 

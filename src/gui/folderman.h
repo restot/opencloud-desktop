@@ -104,8 +104,11 @@ public:
 
     static QString checkPathValidityRecursive(const QString &path, FolderMan::NewFolderType folderType, const QUuid &accountUuid);
 
-    static std::unique_ptr<FolderMan> createInstance();
+    static std::unique_ptr<FolderMan> createInstance(bool useFileProvider = false);
     ~FolderMan() override;
+
+    /// The sync provider is selected at startup and changes only after a restart.
+    bool useFileProvider() const { return _useFileProvider; }
 
     /**
      * Helper to access the FolderMan instance
@@ -263,7 +266,7 @@ private Q_SLOTS:
     void slotServerVersionChanged(Account *account);
 
 private:
-    explicit FolderMan();
+    explicit FolderMan(bool useFileProvider);
 
     [[nodiscard]] static bool prepareFolder(const QString &folder);
 
@@ -286,6 +289,7 @@ private:
     void registerFolderWithSocketApi(Folder *folder);
 
     QVector<Folder *> _folders;
+    const bool _useFileProvider;
     QString _folderConfigPath;
 
     /// Folder aliases from the settings that weren't read

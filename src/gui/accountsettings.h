@@ -56,11 +56,13 @@ class OPENCLOUD_GUI_EXPORT AccountSettings : public QWidget
     Q_PROPERTY(QString connectionLabel READ connectionLabel NOTIFY connectionLabelChanged)
     Q_PROPERTY(QChar accountStateIconGlype READ accountStateIconGlype NOTIFY connectionLabelChanged)
     Q_PROPERTY(QSet<Notification> notifications READ notifications NOTIFY notificationsChanged)
+    Q_PROPERTY(bool useFileProvider READ useFileProvider CONSTANT)
     OC_DECLARE_WIDGET_FOCUS
     QML_ELEMENT
     QML_UNCREATABLE("C++ only")
 
 public:
+    bool useFileProvider() const;
     enum class ModalWidgetSizePolicy { Minimum = QSizePolicy::Minimum, Expanding = QSizePolicy::Expanding };
     Q_ENUM(ModalWidgetSizePolicy)
 

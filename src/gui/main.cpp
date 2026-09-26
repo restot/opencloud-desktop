@@ -39,6 +39,7 @@
 #endif
 
 #ifdef Q_OS_MACOS
+#include "macOS/fileprovider.h"
 #include "macOS/fileproviderdomainmanager.h"
 #endif
 
@@ -492,7 +493,17 @@ int main(int argc, char **argv)
 
         platform->setApplication(&app);
 
-        auto folderManager = FolderMan::createInstance();
+        bool useFileProvider = false;
+#ifdef Q_OS_MACOS
+        useFileProvider = Mac::FileProvider::fileProviderAvailable() && !ConfigFile().traditionalFolderSync();
+        if (!useFileProvider) {
+            if (auto result = Mac::FileProvider::prepareForFolderSync(); !result) {
+                QMessageBox::critical(nullptr, QCoreApplication::translate("main", "Could not switch sync mode"), result.error());
+                return -1;
+            }
+        }
+#endif
+        auto folderManager = FolderMan::createInstance(useFileProvider);
 
         if (!AccountManager::instance()->restore()) {
             qCCritical(lcMain) << u"Could not read the account settings, quitting";

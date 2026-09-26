@@ -19,6 +19,7 @@
 
 #include <QLoggingCategory>
 #include <QUuid>
+#include <functional>
 
 #import <FileProvider/FileProvider.h>
 #import <Foundation/Foundation.h>
@@ -146,7 +147,7 @@ public:
         return domainIdentifierFromAccount(accountState->account().get());
     }
 
-    void addFileProviderDomain(const AccountState *accountState)
+    void addFileProviderDomain(const AccountState *accountState, std::function<void()> onRegistered)
     {
         if (!accountState || !accountState->account()) {
             NSLog(@"[FPDomainManager] addFileProviderDomain: no account");
@@ -184,6 +185,7 @@ public:
             NSLog(@"[FPDomainManager] Successfully added domain");
             qCInfo(lcFileProviderDomainManager) << "Successfully added domain:" << domainId;
             _registeredDomains.insert(domainId, domain);
+            onRegistered();
 
             // Signal enumerators
             NSFileProviderManager *manager = [NSFileProviderManager managerForDomain:domain];
@@ -419,7 +421,12 @@ void FileProviderDomainManager::addFileProviderDomainForAccount(const AccountSta
         return;
     }
 
-    d->addFileProviderDomain(accountState);
+    const QPointer<FileProviderDomainManager> guard(this);
+    d->addFileProviderDomain(accountState, [guard] {
+        if (guard) {
+            QMetaObject::invokeMethod(guard, &FileProviderDomainManager::domainSetupComplete, Qt::QueuedConnection);
+        }
+    });
 
     // Connect to state changes
     connect(accountState, &AccountState::stateChanged,

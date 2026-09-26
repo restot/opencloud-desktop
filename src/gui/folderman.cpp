@@ -88,8 +88,9 @@ const SyncResult &TrayOverallStatusResult::overallStatus() const
 
 FolderMan *FolderMan::_instance = nullptr;
 
-FolderMan::FolderMan()
-    : _lockWatcher(new LockWatcher)
+FolderMan::FolderMan(bool useFileProvider)
+    : _useFileProvider(useFileProvider)
+    , _lockWatcher(new LockWatcher)
     , _scheduler(new SyncScheduler(this))
     , _socketApi(new SocketApi)
 {
@@ -184,6 +185,9 @@ void FolderMan::registerFolderWithSocketApi(Folder *folder)
 
 std::optional<qsizetype> FolderMan::loadFolders()
 {
+    if (_useFileProvider) {
+        return 0;
+    }
     qCInfo(lcFolderMan) << u"Setup folders from settings file";
 
     auto settings = ConfigFile::makeQSettings();
@@ -217,6 +221,9 @@ std::optional<qsizetype> FolderMan::loadFolders()
 
 void FolderMan::saveFolders()
 {
+    if (_useFileProvider) {
+        return;
+    }
     auto settings = ConfigFile::makeQSettings();
     settings.remove(foldersC());
     settings.beginWriteArray(foldersC(), _folders.size());
@@ -310,7 +317,7 @@ void FolderMan::slotIsConnectedChanged()
 // this is not the same as Pause and Resume of folders.
 void FolderMan::setSyncEnabled(bool enabled)
 {
-    if (enabled) {
+    if (enabled && !_useFileProvider) {
         // We have things in our queue that were waiting for the connection to come back on.
         scheduler()->start();
     } else {
@@ -323,6 +330,28 @@ void FolderMan::setSyncEnabled(bool enabled)
 
 void FolderMan::slotRemoveFoldersForAccount(const AccountStatePtr &accountState)
 {
+    if (_useFileProvider) {
+        // Inactive folders are still saved. Remove only this account's definitions.
+        auto settings = ConfigFile::makeQSettings();
+        QVector<FolderDefinition> definitions;
+        const auto size = settings.beginReadArray(foldersC());
+        for (int i = 0; i < size; ++i) {
+            settings.setArrayIndex(i);
+            auto definition = FolderDefinition::load(settings);
+            if (definition.accountUUID() != accountState->account()->uuid()) {
+                definitions.push_back(std::move(definition));
+            }
+        }
+        settings.endArray();
+        settings.remove(foldersC());
+        settings.beginWriteArray(foldersC(), definitions.size());
+        for (qsizetype i = 0; i < definitions.size(); ++i) {
+            settings.setArrayIndex(i);
+            FolderDefinition::save(settings, definitions.at(i));
+        }
+        settings.endArray();
+        return;
+    }
     QList<Folder *> foldersToRemove;
     // reserve a magic number
     foldersToRemove.reserve(16);
@@ -366,6 +395,9 @@ bool FolderMan::isAnySyncRunning() const
 
 Folder *FolderMan::addFolder(const AccountStatePtr &accountState, const FolderDefinition &folderDefinition)
 {
+    if (_useFileProvider) {
+        return nullptr;
+    }
     // Choose a db filename
     auto definition = folderDefinition;
     definition.journalPath = SyncJournalDb::makeDbName(folderDefinition.localPath());
@@ -771,6 +803,9 @@ bool FolderMan::checkVfsAvailability(const QString &path, Vfs::Mode mode) const
 
 Folder *FolderMan::addFolderFromWizard(const AccountStatePtr &accountStatePtr, FolderDefinition &&folderDefinition, bool useVfs)
 {
+    if (_useFileProvider) {
+        return nullptr;
+    }
     if (!FolderMan::prepareFolder(folderDefinition.localPath())) {
         return {};
     }
@@ -820,10 +855,10 @@ bool FolderMan::prepareFolder(const QString &folder)
     return true;
 }
 
-std::unique_ptr<FolderMan> FolderMan::createInstance()
+std::unique_ptr<FolderMan> FolderMan::createInstance(bool useFileProvider)
 {
     OC_ASSERT(!_instance);
-    _instance = new FolderMan();
+    _instance = new FolderMan(useFileProvider);
     return std::unique_ptr<FolderMan>(_instance);
 }
 

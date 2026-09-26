@@ -49,6 +49,7 @@ endif(UNIX AND NOT APPLE)
 opencloud_add_test(LongPath)
 
 opencloud_add_test(FolderMan)
+opencloud_add_test(SyncProviderSelection)
 
 opencloud_add_test(OAuth)
 
