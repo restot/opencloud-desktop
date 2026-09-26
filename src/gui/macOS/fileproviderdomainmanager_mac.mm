@@ -12,14 +12,16 @@
  * for more details.
  */
 
-#include "macOS/fileproviderdomainmanager.h"
 #include "gui/accountmanager.h"
 #include "libsync/account.h"
 #include "libsync/theme.h"
+#include "macOS/fileproviderdomainmanager.h"
+#include "macOS/fileproviderxpc.h"
 
 #include <QLoggingCategory>
+#include <QSet>
+#include <QTimer>
 #include <QUuid>
-#include <functional>
 
 #import <FileProvider/FileProvider.h>
 #import <Foundation/Foundation.h>
@@ -58,75 +60,33 @@ public:
         _registeredDomains.clear();
     }
 
-    void findExistingFileProviderDomains()
+    void findExistingFileProviderDomains(FileProviderDomainManager *owner)
     {
-        NSLog(@"[FPDomainManager] findExistingFileProviderDomains starting...");
-        dispatch_group_t group = dispatch_group_create();
-        dispatch_group_enter(group);
-
+        const QPointer<FileProviderDomainManager> guard(owner);
         [NSFileProviderManager getDomainsWithCompletionHandler:^(NSArray<NSFileProviderDomain *> *domains, NSError *error) {
-            if (error) {
-                NSLog(@"[FPDomainManager] getDomainsWithCompletionHandler error: %@", error);
-                qCWarning(lcFileProviderDomainManager) << "Could not get existing file provider domains:"
-                                                       << QString::fromNSString(error.localizedDescription);
-                dispatch_group_leave(group);
-                return;
-            }
-
-            qCInfo(lcFileProviderDomainManager) << "Found" << domains.count << "existing file provider domains";
-
-            for (NSFileProviderDomain *domain in domains) {
-                QString domainId = QString::fromNSString(domain.identifier);
-                
-                // Domain identifier is account UUID - try to find the account
-                AccountStatePtr accountState;
-                QUuid uuid = QUuid::fromString(domainId);
-                if (!uuid.isNull()) {
-                    accountState = AccountManager::instance()->account(uuid);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!guard) {
+                    return;
                 }
-                
-                // If not found by UUID, search by matching
-                if (!accountState) {
-                    for (const auto &as : AccountManager::instance()->accounts()) {
-                        if (as->account()->uuid().toString(QUuid::WithoutBraces) == domainId) {
-                            accountState = as;
-                            break;
-                        }
+                if (error) {
+                    qCWarning(lcFileProviderDomainManager)
+                        << "Could not get existing file provider domains:" << QString::fromNSString(error.localizedDescription);
+                    QTimer::singleShot(3000, guard, &FileProviderDomainManager::setupFileProviderDomains);
+                    return;
+                }
+                for (NSFileProviderDomain *domain in domains) {
+                    const auto domainId = QString::fromNSString(domain.identifier);
+                    const auto account = FileProviderDomainManager::accountStateFromDomainIdentifier(domainId);
+                    guard->d->_registeredDomains.insert(domainId, domain);
+                    if (!account) {
+                        // Keep orphan domains disabled until their extension has
+                        // acknowledged removing persisted account credentials.
+                        guard->d->disconnectDomain(domainId, FileProviderDomainManager::tr("This account has been removed."));
                     }
                 }
-
-                if (accountState && accountState->account()) {
-                    qCInfo(lcFileProviderDomainManager) << "Found existing domain for account:"
-                                                        << accountState->account()->davDisplayName()
-                                                        << "domainId:" << domainId;
-                    _registeredDomains.insert(domainId, domain);
-                    
-                    // Reconnect the domain
-                    NSFileProviderManager *manager = [NSFileProviderManager managerForDomain:domain];
-                    [manager reconnectWithCompletionHandler:^(NSError *reconnectError) {
-                        if (reconnectError) {
-                            qCWarning(lcFileProviderDomainManager) << "Error reconnecting domain:"
-                                                                   << QString::fromNSString(reconnectError.localizedDescription);
-                        }
-                    }];
-                } else {
-                    qCInfo(lcFileProviderDomainManager) << "Removing orphan domain:" << domainId;
-                    [NSFileProviderManager removeDomain:domain completionHandler:^(NSError *removeError) {
-                        if (removeError) {
-                            qCWarning(lcFileProviderDomainManager) << "Error removing orphan domain:"
-                                                                   << QString::fromNSString(removeError.localizedDescription);
-                        }
-                    }];
-                }
-            }
-
-            dispatch_group_leave(group);
+                guard->updateFileProviderDomains();
+            });
         }];
-
-        if (dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC)) != 0) {
-            NSLog(@"[FPDomainManager] findExistingFileProviderDomains timed out after 30 seconds");
-            qCWarning(lcFileProviderDomainManager) << "findExistingFileProviderDomains timed out after 30 seconds";
-        }
     }
 
     NSFileProviderDomain *domainForAccount(const AccountState *accountState)
@@ -147,101 +107,106 @@ public:
         return domainIdentifierFromAccount(accountState->account().get());
     }
 
-    void addFileProviderDomain(const AccountState *accountState, std::function<void()> onRegistered)
+    void addFileProviderDomain(const AccountState *accountState, FileProviderDomainManager *owner)
     {
         if (!accountState || !accountState->account()) {
-            NSLog(@"[FPDomainManager] addFileProviderDomain: no account");
             return;
         }
-
         const auto account = accountState->account();
         const QString domainId = domainIdentifierFromAccount(account.get());
-        const QString displayName = domainDisplayNameFromAccount(account.get());
-
-        NSLog(@"[FPDomainManager] Adding domain: %s, displayName: %s", 
-              domainId.toUtf8().constData(), displayName.toUtf8().constData());
-        qCInfo(lcFileProviderDomainManager) << "Adding file provider domain:" << domainId
-                                            << "displayName:" << displayName;
-
         if (_registeredDomains.contains(domainId)) {
-            qCDebug(lcFileProviderDomainManager) << "Domain already exists:" << domainId;
+            if (accountState->isSignedOut()) {
+                disconnectDomain(accountState, FileProviderDomainManager::tr("You have been signed out."));
+            } else {
+                reconnectDomain(accountState);
+            }
             return;
         }
-
-        NSFileProviderDomain *domain = [[NSFileProviderDomain alloc] 
-            initWithIdentifier:domainId.toNSString()
-                   displayName:displayName.toNSString()];
+        if (_pendingDomains.contains(domainId) || accountState->isSignedOut()) {
+            return;
+        }
+        _pendingDomains.insert(domainId);
+        NSFileProviderDomain *domain = [[NSFileProviderDomain alloc] initWithIdentifier:domainId.toNSString()
+                                                                            displayName:domainDisplayNameFromAccount(account.get()).toNSString()];
         domain.hidden = NO;
-
-        NSLog(@"[FPDomainManager] Calling NSFileProviderManager addDomain...");
-        [NSFileProviderManager addDomain:domain completionHandler:^(NSError *error) {
-            if (error) {
-                NSLog(@"[FPDomainManager] Error adding domain: %@", error);
-                qCWarning(lcFileProviderDomainManager) << "Error adding domain:" << domainId
-                                                       << QString::fromNSString(error.localizedDescription);
-                return;
-            }
-
-            NSLog(@"[FPDomainManager] Successfully added domain");
-            qCInfo(lcFileProviderDomainManager) << "Successfully added domain:" << domainId;
-            _registeredDomains.insert(domainId, domain);
-            onRegistered();
-
-            // Signal enumerators
-            NSFileProviderManager *manager = [NSFileProviderManager managerForDomain:domain];
-            if (manager) {
-                [manager signalEnumeratorForContainerItemIdentifier:NSFileProviderRootContainerItemIdentifier
-                                                  completionHandler:^(NSError *signalError) {
-                    if (signalError) {
-                        qCDebug(lcFileProviderDomainManager) << "Signal root error:"
-                                                             << QString::fromNSString(signalError.localizedDescription);
-                    }
-                }];
-            }
-        }];
+        const QPointer<FileProviderDomainManager> guard(owner);
+        [NSFileProviderManager addDomain:domain
+                       completionHandler:^(NSError *error) {
+                           dispatch_async(dispatch_get_main_queue(), ^{
+                               if (!guard) {
+                                   return;
+                               }
+                               guard->d->_pendingDomains.remove(domainId);
+                               if (error) {
+                                   qCWarning(lcFileProviderDomainManager)
+                                       << "Error adding domain:" << domainId << QString::fromNSString(error.localizedDescription);
+                                   return;
+                               }
+                               // An account can be removed while macOS is still adding its domain.
+                               const auto currentAccount = FileProviderDomainManager::accountStateFromDomainIdentifier(domainId);
+                               if (!currentAccount) {
+                                   guard->d->_registeredDomains.insert(domainId, domain);
+                                   guard->d->disconnectDomain(domainId, FileProviderDomainManager::tr("This account has been removed."));
+                                   Q_EMIT guard->domainSetupComplete();
+                                   return;
+                               }
+                               guard->d->_registeredDomains.insert(domainId, domain);
+                               if (currentAccount->isSignedOut()) {
+                                   guard->d->disconnectDomain(currentAccount.data(), FileProviderDomainManager::tr("You have been signed out."));
+                               }
+                               Q_EMIT guard->domainSetupComplete();
+                           });
+                       }];
     }
 
-    void removeFileProviderDomain(const AccountState *accountState)
+    void removeFileProviderDomain(const QString &domainId, FileProviderDomainManager *owner)
     {
-        if (!accountState || !accountState->account()) {
-            return;
-        }
-
-        const QString domainId = domainIdentifierFromAccount(accountState->account().get());
         qCInfo(lcFileProviderDomainManager) << "Removing file provider domain:" << domainId;
 
-        NSFileProviderDomain *domain = _registeredDomains.take(domainId);
+        NSFileProviderDomain *domain = _registeredDomains.value(domainId);
         if (!domain) {
             qCWarning(lcFileProviderDomainManager) << "Domain not found:" << domainId;
             return;
         }
 
-        [NSFileProviderManager removeDomain:domain completionHandler:^(NSError *error) {
-            if (error) {
-                qCWarning(lcFileProviderDomainManager) << "Error removing domain:" << domainId
-                                                       << QString::fromNSString(error.localizedDescription);
-            } else {
-                qCInfo(lcFileProviderDomainManager) << "Successfully removed domain:" << domainId;
-            }
-        }];
+        const QPointer<FileProviderDomainManager> guard(owner);
+        [NSFileProviderManager removeDomain:domain
+                          completionHandler:^(NSError *error) {
+                              dispatch_async(dispatch_get_main_queue(), ^{
+                                  if (!guard) {
+                                      return;
+                                  }
+                                  if (error) {
+                                      qCWarning(lcFileProviderDomainManager)
+                                          << "Error removing domain:" << domainId << QString::fromNSString(error.localizedDescription);
+                                      guard->d->disconnectDomain(domainId, FileProviderDomainManager::tr("This account has been removed."));
+                                  } else {
+                                      guard->d->_registeredDomains.remove(domainId);
+                                  }
+                              });
+                          }];
     }
 
     void disconnectDomain(const AccountState *accountState, const QString &reason)
     {
-        NSFileProviderDomain *domain = domainForAccount(accountState);
+        disconnectDomain(domainIdentifierFromAccount(accountState->account().get()), reason);
+    }
+
+    void disconnectDomain(const QString &domainId, const QString &reason)
+    {
+        NSFileProviderDomain *domain = _registeredDomains.value(domainId);
         if (!domain) {
             return;
         }
 
         NSFileProviderManager *manager = [NSFileProviderManager managerForDomain:domain];
         [manager disconnectWithReason:reason.toNSString()
-                              options:NSFileProviderManagerDisconnectionOptionsTemporary
+                              options:0
                     completionHandler:^(NSError *error) {
-            if (error) {
-                qCWarning(lcFileProviderDomainManager) << "Error disconnecting domain:"
-                                                       << QString::fromNSString(error.localizedDescription);
-            }
-        }];
+                        if (error) {
+                            qCWarning(lcFileProviderDomainManager) << "Error disconnecting domain:" << QString::fromNSString(error.localizedDescription);
+                        }
+                    }];
     }
 
     void reconnectDomain(const AccountState *accountState)
@@ -317,11 +282,6 @@ public:
             if (dispatch_group_wait(removeGroup, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC)) != 0) {
                 NSLog(@"[FPDomainManager] removeAllDomains remove group timed out after 30 seconds");
                 qCWarning(lcFileProviderDomainManager) << "removeAllDomains: remove group timed out after 30 seconds";
-                // Don't clear _registeredDomains on timeout — some domains may
-                // not have been removed yet. Clearing would cause duplicate
-                // domain registrations when updateFileProviderDomains re-adds them.
-            } else {
-                _registeredDomains.clear();
             }
 
             dispatch_group_leave(group);
@@ -341,13 +301,23 @@ public:
 private:
     // Keys are domain identifiers (account UUIDs)
     QHash<QString, NSFileProviderDomain *> _registeredDomains;
+    QSet<QString> _pendingDomains;
 };
 
 // FileProviderDomainManager implementation
 
-FileProviderDomainManager::FileProviderDomainManager(QObject *parent)
+FileProviderDomainManager::FileProviderDomainManager(QObject *parent, FileProviderXPC *xpc)
     : QObject(parent)
+    , _xpc(xpc)
 {
+    if (_xpc) {
+        connect(_xpc, &FileProviderXPC::domainConnected, this, [this](const QString &domainId) {
+            const auto account = accountStateFromDomainIdentifier(domainId);
+            if (!account || account->isSignedOut()) {
+                clearAccountConfiguration(domainId, !account);
+            }
+        });
+    }
     if (@available(macOS 11.0, *)) {
         d = std::make_unique<MacImplementation>();
     } else {
@@ -366,18 +336,15 @@ void FileProviderDomainManager::start()
     }
 
     qCInfo(lcFileProviderDomainManager) << "Starting FileProvider domain manager";
-    setupFileProviderDomains();
-
     // Connect to account manager signals
     connect(AccountManager::instance(), &AccountManager::accountAdded,
             this, [this](AccountStatePtr accountState) {
                 addFileProviderDomainForAccount(accountState.data());
             });
 
-    connect(AccountManager::instance(), &AccountManager::accountRemoved,
-            this, [this](AccountStatePtr accountState) {
-                removeFileProviderDomainForAccount(accountState.data());
-            });
+    connect(AccountManager::instance(), &AccountManager::accountDeleted, this,
+        [this](AccountStatePtr accountState) { removeFileProviderDomainForAccount(accountState.data()); });
+    setupFileProviderDomains();
 }
 
 void FileProviderDomainManager::setupFileProviderDomains()
@@ -386,8 +353,7 @@ void FileProviderDomainManager::setupFileProviderDomains()
         return;
     }
 
-    d->findExistingFileProviderDomains();
-    updateFileProviderDomains();
+    d->findExistingFileProviderDomains(this);
 }
 
 void FileProviderDomainManager::updateFileProviderDomains()
@@ -400,16 +366,9 @@ void FileProviderDomainManager::updateFileProviderDomains()
     NSLog(@"[FPDomainManager] updateFileProviderDomains - %lu accounts", (unsigned long)accounts.size());
     qCDebug(lcFileProviderDomainManager) << "Updating file provider domains";
 
-    // Add domains for any accounts that don't have one
+    // Existing domains need the same sign-out handlers as newly created ones.
     for (const auto &accountState : accounts) {
-        const QString domainId = domainIdentifierFromAccount(accountState->account().get());
-        NSLog(@"[FPDomainManager] Checking account domainId: %s", domainId.toUtf8().constData());
-        if (!d->registeredDomainIds().contains(domainId)) {
-            NSLog(@"[FPDomainManager] Domain not registered, adding...");
-            addFileProviderDomainForAccount(accountState.data());
-        } else {
-            NSLog(@"[FPDomainManager] Domain already registered");
-        }
+        addFileProviderDomainForAccount(accountState.data());
     }
 
     Q_EMIT domainSetupComplete();
@@ -421,16 +380,8 @@ void FileProviderDomainManager::addFileProviderDomainForAccount(const AccountSta
         return;
     }
 
-    const QPointer<FileProviderDomainManager> guard(this);
-    d->addFileProviderDomain(accountState, [guard] {
-        if (guard) {
-            QMetaObject::invokeMethod(guard, &FileProviderDomainManager::domainSetupComplete, Qt::QueuedConnection);
-        }
-    });
-
-    // Connect to state changes
-    connect(accountState, &AccountState::stateChanged,
-            this, &FileProviderDomainManager::slotAccountStateChanged);
+    connect(accountState, &AccountState::stateChanged, this, &FileProviderDomainManager::slotAccountStateChanged, Qt::UniqueConnection);
+    d->addFileProviderDomain(accountState, this);
 }
 
 void FileProviderDomainManager::removeFileProviderDomainForAccount(const AccountState *accountState)
@@ -439,7 +390,37 @@ void FileProviderDomainManager::removeFileProviderDomainForAccount(const Account
         return;
     }
 
-    d->removeFileProviderDomain(accountState);
+    clearAccountConfiguration(domainIdentifierFromAccount(accountState->account().get()), true);
+}
+
+void FileProviderDomainManager::clearAccountConfiguration(const QString &domainId, bool removeDomain)
+{
+    const QPointer<FileProviderDomainManager> guard(this);
+    auto complete = [guard, domainId, removeDomain](bool success) {
+        if (!guard) {
+            return;
+        }
+        const auto account = accountStateFromDomainIdentifier(domainId);
+        // Signing back in while the reply was pending supersedes a sign-out.
+        if (!removeDomain && account && !account->isSignedOut()) {
+            return;
+        }
+        if (removeDomain && success) {
+            guard->d->removeFileProviderDomain(domainId, guard);
+            if (guard->_xpc) {
+                guard->_xpc->closeConnection(domainId);
+            }
+        } else {
+            // An unavailable extension must not keep synchronizing. Preserve its
+            // domain on cleanup failure, and do not claim its credentials were erased.
+            guard->d->disconnectDomain(domainId, tr("You have been signed out."));
+        }
+    };
+    if (_xpc) {
+        _xpc->clearAccountConfiguration(domainId, std::move(complete));
+    } else {
+        complete(false);
+    }
 }
 
 void FileProviderDomainManager::slotAccountStateChanged(AccountState::State state)
@@ -458,7 +439,7 @@ void FileProviderDomainManager::slotAccountStateChanged(AccountState::State stat
 
     switch (state) {
     case AccountState::SignedOut:
-        d->disconnectDomain(accountState, tr("You have been signed out."));
+        clearAccountConfiguration(domainIdentifierFromAccount(accountState->account().get()), false);
         break;
     case AccountState::Disconnected:
         // Don't disconnect on transient state. Network hiccups cause
@@ -467,7 +448,7 @@ void FileProviderDomainManager::slotAccountStateChanged(AccountState::State stat
         // and if reconnect fails the domain stays disabled.
         break;
     case AccountState::Connected:
-        d->reconnectDomain(accountState);
+        d->addFileProviderDomain(accountState, this);
         break;
     case AccountState::Connecting:
         // Do nothing while connecting

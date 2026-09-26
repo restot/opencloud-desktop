@@ -373,7 +373,7 @@ done
 # 4. FinderSyncExt.appex
 if [ -d "$STAGE_APP/Contents/PlugIns/FinderSyncExt.appex" ]; then
     echo "  Signing FinderSyncExt.appex..."
-    sign_binary "$STAGE_APP/Contents/PlugIns/FinderSyncExt.appex"
+    sign_binary "$STAGE_APP/Contents/PlugIns/FinderSyncExt.appex" "$ENTITLEMENTS_DIR/appex.plist"
 fi
 
 # 5. FileProviderExt.appex (with entitlements)

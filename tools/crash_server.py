@@ -4,14 +4,14 @@ Simple crash report receiver for OpenCloud Desktop development.
 Receives multipart/form-data crash reports and stores them locally.
 
 Usage:
-    python3 crash_server.py [port]
+    python3 crash_server.py [port] [--host ADDRESS]
 
 Default port: 8080
 Reports saved to: ./crash_reports/
 """
 
 import os
-import sys
+import argparse
 import json
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -66,7 +66,11 @@ class CrashReportHandler(BaseHTTPRequestHandler):
                         continue
                     
                     if filename:
-                        # It's a file (like the .dmp minidump)
+                        # Uploaded names must stay inside this report's directory.
+                        if (filename in (".", "..") or "/" in filename
+                                or "\\" in filename or "\x00" in filename
+                                or os.path.isabs(filename)):
+                            raise ValueError("Invalid attachment filename")
                         filepath = os.path.join(report_dir, filename)
                         with open(filepath, "wb") as f:
                             f.write(part.get_payload(decode=True))
@@ -106,6 +110,8 @@ class CrashReportHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(f"CrashID={report_id}\n".encode())
 
+        except ValueError as e:
+            self.send_error(400, str(e))
         except Exception as e:
             print(f"\n✗ Error processing crash report: {e}\n")
             self.send_response(500)
@@ -125,14 +131,19 @@ class CrashReportHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("port", nargs="?", type=int, default=8080)
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="Bind address, default: 127.0.0.1")
+    args = parser.parse_args()
+    port = args.port
 
     os.makedirs(REPORTS_DIR, exist_ok=True)
 
-    server = HTTPServer(("0.0.0.0", port), CrashReportHandler)
-    print(f"🚀 Crash report server running on http://localhost:{port}")
+    server = HTTPServer((args.host, port), CrashReportHandler)
+    print(f"🚀 Crash report server running on http://{args.host}:{port}")
     print(f"📁 Reports will be saved to: {REPORTS_DIR}")
-    print(f"\nUse this URL for CRASHREPORTER_SUBMIT_URL: http://localhost:{port}/submit\n")
+    print(f"\nUse this URL for CRASHREPORTER_SUBMIT_URL: http://{args.host}:{port}/submit\n")
 
     try:
         server.serve_forever()

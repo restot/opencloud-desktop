@@ -27,6 +27,8 @@ class Account;
 
 namespace Mac {
 
+    class FileProviderXPC;
+
     /**
      * @brief Manages FileProvider domain registration on macOS
      *
@@ -41,7 +43,7 @@ namespace Mac {
         Q_OBJECT
 
     public:
-        explicit FileProviderDomainManager(QObject *parent = nullptr);
+        explicit FileProviderDomainManager(QObject *parent = nullptr, FileProviderXPC *xpc = nullptr);
         ~FileProviderDomainManager() override;
 
         /**
@@ -83,6 +85,8 @@ namespace Mac {
         void slotAccountStateChanged(AccountState::State state);
 
     private:
+        void clearAccountConfiguration(const QString &domainIdentifier, bool removeDomain);
+        QPointer<FileProviderXPC> _xpc;
         class MacImplementation;
         std::unique_ptr<MacImplementation> d;
     };

@@ -222,7 +222,11 @@ void Application::slotCleanup()
     FolderMan::instance()->scheduler()->terminateCurrentSync(tr("Application is shutting down"));
     FolderMan::instance()->unloadAndDeleteAllFolders();
 
-    // Remove the account from the account manager so it can be deleted.
+    // shutdown() emits accountRemoved while unloading saved accounts. These are
+    // not user deletions: preserve FileProvider domains and inactive folders.
+#ifdef Q_OS_MAC
+    delete Mac::FileProvider::_instance;
+#endif
     AccountManager::instance()->shutdown();
 }
 

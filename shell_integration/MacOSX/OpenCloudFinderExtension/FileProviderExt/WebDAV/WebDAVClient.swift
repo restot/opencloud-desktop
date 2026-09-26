@@ -106,7 +106,7 @@ actor WebDAVClient {
     /// Base delay for exponential backoff (seconds)
     private static let baseRetryDelay: TimeInterval = 1.0
 
-    init(serverURL: URL, davPath: String = "/remote.php/webdav", username: String, password: String, useBearer: Bool = false) {
+    init(serverURL: URL, davPath: String = "/remote.php/webdav", username: String, password: String, useBearer: Bool = false, sessionConfiguration: URLSessionConfiguration? = nil) {
         self.serverURL = serverURL
         self.davPath = davPath
         self.username = username
@@ -116,7 +116,7 @@ actor WebDAVClient {
         NSLog("[WebDAVClient] init: server=%@, davPath=%@, user=%@, useBearer=%d", serverURL.absoluteString, davPath, username, useBearer)
 
         // Configure URL session
-        let config = URLSessionConfiguration.default
+        let config = sessionConfiguration ?? URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 300
         self.session = URLSession(configuration: config)
@@ -209,6 +209,15 @@ actor WebDAVClient {
         return request
     }
     
+    private static func quotedETag(_ etag: String) -> String {
+        etag.hasPrefix("\"") || etag.hasPrefix("W/\"") ? etag : "\"\(etag)\""
+    }
+
+    func isRootPath(_ path: String) -> Bool {
+        let separators = CharacterSet(charactersIn: "/")
+        return path.trimmingCharacters(in: separators) == url(for: "/")?.path.trimmingCharacters(in: separators)
+    }
+
     // MARK: - Public API
     
     /// List directory contents via PROPFIND Depth: 1
@@ -241,12 +250,22 @@ actor WebDAVClient {
 
         switch httpResponse.statusCode {
         case 207: // Multi-Status
-            let parser = WebDAVXMLParser(baseURL: serverURL)
+            let parser = WebDAVXMLParser(baseURL: url)
             guard let items = parser.parse(data: data) else {
                 throw WebDAVError.parseError("Failed to parse PROPFIND response")
             }
             logger.info("Parsed \(items.count) items from PROPFIND")
-            return items
+            // WebDAV does not prescribe response order. Callers expect the
+            // requested resource first, so locate it by its decoded path.
+            let requestedPath = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard let index = items.firstIndex(where: {
+                $0.remotePath.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == requestedPath
+            }) else {
+                throw WebDAVError.parseError("PROPFIND omitted the requested resource")
+            }
+            var ordered = items
+            ordered.insert(ordered.remove(at: index), at: 0)
+            return ordered
 
         case 401:
             throw WebDAVError.notAuthenticated
@@ -262,20 +281,23 @@ actor WebDAVClient {
     }
     
     /// Download a file to a local URL
-    func downloadFile(remotePath: String, to localURL: URL, progress: Progress? = nil) async throws {
+    func downloadFile(remotePath: String, to localURL: URL, ifMatchEtag: String? = nil, progress: Progress? = nil) async throws {
         try await withRetry {
-            try await self.performDownloadFile(remotePath: remotePath, to: localURL, progress: progress)
+            try await self.performDownloadFile(remotePath: remotePath, to: localURL, ifMatchEtag: ifMatchEtag, progress: progress)
         }
     }
 
-    private func performDownloadFile(remotePath: String, to localURL: URL, progress: Progress?) async throws {
+    private func performDownloadFile(remotePath: String, to localURL: URL, ifMatchEtag: String?, progress: Progress?) async throws {
         guard let url = url(for: remotePath) else {
             throw WebDAVError.invalidURL
         }
 
         logger.info("GET \(url.absoluteString) -> \(localURL.path)")
 
-        let request = authenticatedRequest(url: url, method: "GET")
+        var request = authenticatedRequest(url: url, method: "GET")
+        if let etag = ifMatchEtag {
+            request.setValue(Self.quotedETag(etag), forHTTPHeaderField: "If-Match")
+        }
 
         let (tempURL, response) = try await session.download(for: request)
 
@@ -302,6 +324,8 @@ actor WebDAVClient {
             throw WebDAVError.permissionDenied
         case 404:
             throw WebDAVError.fileNotFound
+        case 412:
+            throw WebDAVError.conflict
         default:
             throw WebDAVError.httpError(statusCode: httpResponse.statusCode, message: nil)
         }
@@ -309,13 +333,13 @@ actor WebDAVClient {
     
     /// Upload a file from a local URL
     /// - Parameter ifMatchEtag: If set, sends If-Match header for conflict detection (412 on mismatch)
-    func uploadFile(from localURL: URL, to remotePath: String, ifMatchEtag: String? = nil, progress: Progress? = nil) async throws -> WebDAVItem? {
+    func uploadFile(from localURL: URL, to remotePath: String, ifMatchEtag: String? = nil, ifNoneMatch: Bool = false, progress: Progress? = nil) async throws -> WebDAVItem? {
         try await withRetry {
-            try await self.performUploadFile(from: localURL, to: remotePath, ifMatchEtag: ifMatchEtag, progress: progress)
+            try await self.performUploadFile(from: localURL, to: remotePath, ifMatchEtag: ifMatchEtag, ifNoneMatch: ifNoneMatch, progress: progress)
         }
     }
 
-    private func performUploadFile(from localURL: URL, to remotePath: String, ifMatchEtag: String?, progress: Progress?) async throws -> WebDAVItem? {
+    private func performUploadFile(from localURL: URL, to remotePath: String, ifMatchEtag: String?, ifNoneMatch: Bool, progress: Progress?) async throws -> WebDAVItem? {
         guard let url = url(for: remotePath) else {
             throw WebDAVError.invalidURL
         }
@@ -331,7 +355,11 @@ actor WebDAVClient {
 
         // Conflict detection via ETag
         if let etag = ifMatchEtag {
-            request.setValue(etag, forHTTPHeaderField: "If-Match")
+            // Older cached versions omitted the HTTP entity-tag quotes.
+            request.setValue(Self.quotedETag(etag), forHTTPHeaderField: "If-Match")
+        }
+        if ifNoneMatch {
+            request.setValue("*", forHTTPHeaderField: "If-None-Match")
         }
 
         // Stream from file instead of loading into memory to avoid OOM on large files
@@ -348,7 +376,7 @@ actor WebDAVClient {
             progress?.completedUnitCount = progress?.totalUnitCount ?? 1
 
             // Fetch updated metadata via PROPFIND
-            let items = try await performListDirectory(path: remotePath)
+            let items = try await listDirectory(path: remotePath)
             return items.first
 
         case 401:
@@ -393,7 +421,7 @@ actor WebDAVClient {
         switch httpResponse.statusCode {
         case 201:
             // Fetch created directory metadata
-            let items = try await performListDirectory(path: remotePath)
+            let items = try await listDirectory(path: remotePath)
             return items.first
 
         case 401:
@@ -408,20 +436,23 @@ actor WebDAVClient {
     }
     
     /// Delete a file or directory
-    func deleteItem(at remotePath: String) async throws {
+    func deleteItem(at remotePath: String, ifMatchEtag: String? = nil) async throws {
         try await withRetry {
-            try await self.performDeleteItem(at: remotePath)
+            try await self.performDeleteItem(at: remotePath, ifMatchEtag: ifMatchEtag)
         }
     }
 
-    private func performDeleteItem(at remotePath: String) async throws {
+    private func performDeleteItem(at remotePath: String, ifMatchEtag: String?) async throws {
         guard let url = url(for: remotePath) else {
             throw WebDAVError.invalidURL
         }
 
         logger.info("DELETE \(url.absoluteString)")
 
-        let request = authenticatedRequest(url: url, method: "DELETE")
+        var request = authenticatedRequest(url: url, method: "DELETE")
+        if let etag = ifMatchEtag {
+            request.setValue(Self.quotedETag(etag), forHTTPHeaderField: "If-Match")
+        }
 
         let (_, response) = try await session.data(for: request)
 
@@ -440,19 +471,40 @@ actor WebDAVClient {
             throw WebDAVError.permissionDenied
         case 404:
             throw WebDAVError.fileNotFound
+        case 412:
+            throw WebDAVError.conflict
         default:
             throw WebDAVError.httpError(statusCode: httpResponse.statusCode, message: nil)
         }
     }
     
     /// Move/rename a file or directory
-    func moveItem(from sourcePath: String, to destinationPath: String, overwrite: Bool = false) async throws -> WebDAVItem? {
-        try await withRetry {
-            try await self.performMoveItem(from: sourcePath, to: destinationPath, overwrite: overwrite)
+    func moveItem(from sourcePath: String, to destinationPath: String, overwrite: Bool = false, expectedIdentifier: String? = nil) async throws -> WebDAVItem? {
+        do {
+            try await withRetry {
+                try await self.performMoveItem(from: sourcePath, to: destinationPath, overwrite: overwrite)
+            }
+        } catch WebDAVError.fileNotFound {
+            // A previous attempt may have committed MOVE before its response or
+            // metadata fetch was lost. A name match alone cannot prove this.
+            let fallbackIdentifier = WebDAVItem.generateIdentifier(from: url(for: sourcePath)?.path ?? sourcePath)
+            guard let expectedIdentifier = expectedIdentifier,
+                  expectedIdentifier != fallbackIdentifier else {
+                throw WebDAVError.fileNotFound
+            }
+            guard let destination = try await listDirectory(path: destinationPath).first,
+                  destination.ocId == expectedIdentifier else {
+                throw WebDAVError.conflict
+            }
+            return destination
         }
+
+        // Once MOVE succeeds, retry only the read. Reissuing MOVE would target
+        // a source path that no longer exists.
+        return try await listDirectory(path: destinationPath).first
     }
 
-    private func performMoveItem(from sourcePath: String, to destinationPath: String, overwrite: Bool) async throws -> WebDAVItem? {
+    private func performMoveItem(from sourcePath: String, to destinationPath: String, overwrite: Bool) async throws {
         guard let sourceURL = url(for: sourcePath),
               let destURL = url(for: destinationPath) else {
             throw WebDAVError.invalidURL
@@ -474,9 +526,7 @@ actor WebDAVClient {
 
         switch httpResponse.statusCode {
         case 201, 204:
-            // Fetch moved item metadata
-            let items = try await performListDirectory(path: destinationPath)
-            return items.first
+            return
 
         case 401:
             throw WebDAVError.notAuthenticated

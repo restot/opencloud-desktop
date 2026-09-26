@@ -47,8 +47,10 @@ actor ItemDatabase {
         var dbHandle: OpaquePointer?
         if sqlite3_open(dbURL.path, &dbHandle) != SQLITE_OK {
             let error = String(cString: sqlite3_errmsg(dbHandle))
+            sqlite3_close(dbHandle)
             throw DatabaseError.openFailed(error)
         }
+        sqlite3_busy_timeout(dbHandle, 5_000)
         self.db = dbHandle
         
         // Create tables using static helper (doesn't need actor isolation)
@@ -84,6 +86,39 @@ actor ItemDatabase {
             
             CREATE INDEX IF NOT EXISTS idx_items_parent ON items(parent_oc_id);
             CREATE INDEX IF NOT EXISTS idx_items_remote_path ON items(remote_path);
+
+            CREATE TABLE IF NOT EXISTS sync_state (epoch TEXT NOT NULL);
+            INSERT INTO sync_state(epoch) SELECT lower(hex(randomblob(16)))
+                WHERE NOT EXISTS (SELECT 1 FROM sync_state);
+            CREATE TABLE IF NOT EXISTS item_changes (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                oc_id TEXT NOT NULL,
+                parent_oc_id TEXT NOT NULL
+            );
+            CREATE TRIGGER IF NOT EXISTS items_before_replace BEFORE INSERT ON items
+                WHEN EXISTS (SELECT 1 FROM items WHERE oc_id = NEW.oc_id AND parent_oc_id != NEW.parent_oc_id)
+                BEGIN
+                    INSERT INTO item_changes(oc_id, parent_oc_id)
+                        SELECT oc_id, parent_oc_id FROM items WHERE oc_id = NEW.oc_id;
+                END;
+            CREATE TRIGGER IF NOT EXISTS items_insert AFTER INSERT ON items BEGIN
+                INSERT INTO item_changes(oc_id, parent_oc_id) VALUES (NEW.oc_id, NEW.parent_oc_id);
+            END;
+            CREATE TRIGGER IF NOT EXISTS items_update AFTER UPDATE ON items
+                WHEN OLD.remote_path IS NOT NEW.remote_path
+                  OR OLD.is_downloaded IS NOT NEW.is_downloaded
+                  OR OLD.is_downloading IS NOT NEW.is_downloading
+                  OR OLD.is_uploading IS NOT NEW.is_uploading
+                  OR OLD.is_uploaded IS NOT NEW.is_uploaded
+                  OR OLD.status IS NOT NEW.status
+                  OR OLD.status_error IS NOT NEW.status_error
+                  OR OLD.size IS NOT NEW.size
+                BEGIN
+                INSERT INTO item_changes(oc_id, parent_oc_id) VALUES (NEW.oc_id, NEW.parent_oc_id);
+            END;
+            CREATE TRIGGER IF NOT EXISTS items_delete AFTER DELETE ON items BEGIN
+                INSERT INTO item_changes(oc_id, parent_oc_id) VALUES (OLD.oc_id, OLD.parent_oc_id);
+            END;
             """
         
         var errMsg: UnsafeMutablePointer<CChar>?
@@ -165,8 +200,70 @@ actor ItemDatabase {
         return items
     }
     
-    /// Add or update item metadata
+    /// Store metadata and keep cached descendant paths valid after a directory move.
     func addItemMetadata(_ metadata: ItemMetadata) throws {
+        let existing = itemMetadata(ocId: metadata.ocId)
+        if var existing = existing {
+            existing.syncTime = metadata.syncTime
+            if existing == metadata { return }
+        }
+        guard let existing = existing, existing.isDirectory,
+              existing.remotePath != metadata.remotePath else {
+            try storeItemMetadata(metadata)
+            return
+        }
+
+        try executeUpdate("BEGIN IMMEDIATE")
+        do {
+            try storeItemMetadata(metadata)
+            let oldPrefix = existing.remotePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let newPrefix = metadata.remotePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let oldPath = "/" + oldPrefix + "/"
+            let newPath = "/" + newPrefix + "/"
+            // substr avoids interpreting '%' and '_' in filenames as SQL wildcards.
+            let sql = "UPDATE items SET remote_path = ? || substr(remote_path, ?) WHERE substr(remote_path, 1, ?) = ?"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                throw DatabaseError.updateFailed(String(cString: sqlite3_errmsg(db)))
+            }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, newPath, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int(stmt, 2, Int32(oldPath.unicodeScalars.count + 1))
+            sqlite3_bind_int(stmt, 3, Int32(oldPath.unicodeScalars.count))
+            sqlite3_bind_text(stmt, 4, oldPath, -1, SQLITE_TRANSIENT)
+            guard sqlite3_step(stmt) == SQLITE_DONE else {
+                throw DatabaseError.updateFailed(String(cString: sqlite3_errmsg(db)))
+            }
+            try executeUpdate("COMMIT")
+        } catch {
+            try? executeUpdate("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// Merge server fields inside the actor so a concurrent download cannot lose its state.
+    func mergeServerMetadata(_ metadata: ItemMetadata, fetchedAfter: Date? = nil) throws -> ItemMetadata {
+        var merged = metadata
+        if let existing = itemMetadata(ocId: metadata.ocId) {
+            if let fetchedAfter = fetchedAfter, existing.syncTime > fetchedAfter { return existing }
+            merged.isDownloaded = existing.isDownloaded
+            merged.isDownloading = existing.isDownloading
+            merged.isUploaded = existing.isUploaded
+            merged.isUploading = existing.isUploading
+            merged.status = existing.status
+            merged.statusError = existing.statusError
+        }
+        try addItemMetadata(merged)
+        return merged
+    }
+
+    private func executeUpdate(_ sql: String) throws {
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            throw DatabaseError.updateFailed(String(cString: sqlite3_errmsg(db)))
+        }
+    }
+
+    private func storeItemMetadata(_ metadata: ItemMetadata) throws {
         let sql = """
             INSERT OR REPLACE INTO items (
                 oc_id, file_id, parent_oc_id, remote_path, filename, etag,
@@ -232,6 +329,16 @@ actor ItemDatabase {
         }
     }
     
+    /// Ignore a stale directory response if another operation updated or moved the item.
+    func deleteIfUnchanged(_ metadata: ItemMetadata) throws {
+        guard itemMetadata(ocId: metadata.ocId) == metadata else { return }
+        if metadata.isDirectory {
+            try deleteDirectoryAndSubdirectories(ocId: metadata.ocId)
+        } else {
+            try deleteItemMetadata(ocId: metadata.ocId)
+        }
+    }
+
     /// Delete item metadata by ocId
     func deleteItemMetadata(ocId: String) throws {
         let sql = "DELETE FROM items WHERE oc_id = ?"
@@ -263,7 +370,7 @@ actor ItemDatabase {
         let sql = """
             WITH RECURSIVE descendants(oc_id) AS (
                 SELECT oc_id FROM items WHERE oc_id = ?
-                UNION ALL
+                UNION
                 SELECT i.oc_id FROM items i
                 INNER JOIN descendants d ON i.parent_oc_id = d.oc_id
             )
@@ -393,6 +500,85 @@ actor ItemDatabase {
         }
     }
     
+    /// A persisted epoch rejects anchors from a replaced database or the old timestamp format.
+    func currentSyncAnchor() throws -> Data {
+        let state = try syncState()
+        return Data("\(state.epoch):\(state.sequence)".utf8)
+    }
+
+    private func syncState() throws -> (epoch: String, sequence: Int64) {
+        var stmt: OpaquePointer?
+        let sql = "SELECT epoch, COALESCE((SELECT MAX(sequence) FROM item_changes), 0) FROM sync_state"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else {
+            throw DatabaseError.readFailed("Missing sync state")
+        }
+        return (columnString(stmt, 0), sqlite3_column_int64(stmt, 1))
+    }
+
+    /// Read the delta and its upper anchor in one actor turn, including durable tombstones.
+    /// nil parent denotes the working set, which includes all known items.
+    func changes(since anchor: Data, parentOcId: String?) throws -> (updated: [ItemMetadata], deleted: [String], anchor: Data) {
+        let state = try syncState()
+        let parts = String(data: anchor, encoding: .utf8)?.split(separator: ":") ?? []
+        guard parts.count == 2, parts[0] == state.epoch,
+              let sequence = Int64(parts[1]), sequence >= 0, sequence <= state.sequence else {
+            throw DatabaseError.expiredAnchor
+        }
+        var stmt: OpaquePointer?
+        let sql = "SELECT DISTINCT oc_id FROM item_changes WHERE sequence > ? AND (? IS NULL OR parent_oc_id = ?)"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, sequence)
+        if let parentOcId = parentOcId {
+            sqlite3_bind_text(stmt, 2, parentOcId, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 3, parentOcId, -1, SQLITE_TRANSIENT)
+        } else {
+            sqlite3_bind_null(stmt, 2)
+            sqlite3_bind_null(stmt, 3)
+        }
+        var updated: [ItemMetadata] = []
+        var deleted: [String] = []
+        var result = sqlite3_step(stmt)
+        while result == SQLITE_ROW {
+            let identifier = columnString(stmt, 0)
+            if let metadata = itemMetadata(ocId: identifier),
+               parentOcId == nil || metadata.parentOcId == parentOcId {
+                updated.append(metadata)
+            } else {
+                deleted.append(identifier)
+            }
+            result = sqlite3_step(stmt)
+        }
+        guard result == SQLITE_DONE else {
+            throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        return (updated, deleted, Data("\(state.epoch):\(state.sequence)".utf8))
+    }
+
+    func allItems() throws -> [ItemMetadata] {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT * FROM items ORDER BY remote_path", -1, &stmt, nil) == SQLITE_OK else {
+            throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        var items: [ItemMetadata] = []
+        var result = sqlite3_step(stmt)
+        while result == SQLITE_ROW {
+            if let metadata = metadataFromRow(stmt) { items.append(metadata) }
+            result = sqlite3_step(stmt)
+        }
+        guard result == SQLITE_DONE else {
+            throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        return items
+    }
+
     // MARK: - Helpers
 
     /// Safe helper: returns empty string when sqlite3_column_text returns NULL
@@ -480,6 +666,8 @@ actor ItemDatabase {
 // MARK: - Errors
 
 enum DatabaseError: Error, LocalizedError {
+    case readFailed(String)
+    case expiredAnchor
     case openFailed(String)
     case createTableFailed(String)
     case insertFailed(String)
@@ -488,6 +676,8 @@ enum DatabaseError: Error, LocalizedError {
     
     var errorDescription: String? {
         switch self {
+        case .readFailed(let msg): return "Failed to read: \(msg)"
+        case .expiredAnchor: return "The sync anchor has expired"
         case .openFailed(let msg): return "Failed to open database: \(msg)"
         case .createTableFailed(let msg): return "Failed to create table: \(msg)"
         case .insertFailed(let msg): return "Failed to insert: \(msg)"

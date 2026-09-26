@@ -110,8 +110,7 @@ FolderMan::FolderMan(bool useFileProvider)
     updateSyncRoots();
     connect(AccountManager::instance(), &AccountManager::accountAdded, this, updateSyncRoots);
 #endif
-    connect(AccountManager::instance(), &AccountManager::accountRemoved,
-        this, &FolderMan::slotRemoveFoldersForAccount);
+    connect(AccountManager::instance(), &AccountManager::accountDeleted, this, &FolderMan::slotRemoveFoldersForAccount);
 
     connect(_lockWatcher.data(), &LockWatcher::fileUnlocked, this, [this](const QString &path, FileSystem::LockMode) {
         if (Folder *f = folderForPath(path)) {

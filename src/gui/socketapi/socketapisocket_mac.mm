@@ -47,14 +47,7 @@ public:
     {
     }
 
-    ~SocketApiSocketPrivate()
-    {
-        if (localSocket) {
-            localSocket->disconnectFromServer();
-            localSocket->deleteLater();
-            localSocket = nullptr;
-        }
-    }
+    // The public wrapper owns the socket as a QObject child.
 
     void disconnectRemote()
     {
@@ -108,6 +101,7 @@ SocketApiSocket::SocketApiSocket(QObject *parent, SocketApiSocketPrivate *p)
 
     // Connect signals from the underlying QLocalSocket
     if (d->localSocket) {
+        d->localSocket->setParent(this);
         connect(d->localSocket, &QLocalSocket::readyRead, this, [this]() {
             Q_D(SocketApiSocket);
             // Read all available data into our buffer
@@ -142,6 +136,10 @@ SocketApiSocket::SocketApiSocket(QObject *parent, SocketApiSocketPrivate *p)
 
 SocketApiSocket::~SocketApiSocket()
 {
+    Q_D(SocketApiSocket);
+    // Stop callbacks before d_ptr is destroyed. QObject then destroys the socket.
+    disconnect(d->localSocket, nullptr, this, nullptr);
+    d->localSocket->disconnectFromServer();
 }
 
 qint64 SocketApiSocket::readData(char *data, qint64 maxlen)
@@ -236,6 +234,8 @@ bool SocketApiServer::listen(const QString &name)
         QFile::remove(d->socketPath);
     }
 
+    // Finder extensions run as the same user as the app.
+    d->localServer->setSocketOptions(QLocalServer::UserAccessOption);
     // Start listening
     if (!d->localServer->listen(d->socketPath)) {
         qCWarning(lcSocketApiMac) << "Failed to start socket server:" << d->localServer->errorString();

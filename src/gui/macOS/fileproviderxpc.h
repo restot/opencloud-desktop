@@ -16,6 +16,8 @@
 
 #include <QHash>
 #include <QObject>
+#include <QSet>
+#include <functional>
 
 #include "gui/accountstate.h"
 
@@ -63,12 +65,26 @@ namespace Mac {
          */
         void unauthenticateFileProviderDomain(const QString &domainIdentifier);
 
+    public:
+        void clearAccountConfiguration(const QString &domainIdentifier, std::function<void(bool)> completion);
+        void closeConnection(const QString &domainIdentifier);
+
+    Q_SIGNALS:
+        void domainConnected(const QString &domainIdentifier);
+
     private Q_SLOTS:
         void slotAccountStateChanged(AccountState::State state);
         void reconnectAfterInvalidation();
         void refreshCredentials();
 
     private:
+        void clearConnections();
+        void finishClearingAccount(const QString &domainIdentifier, bool success);
+        QHash<QString, QList<std::function<void(bool)>>> _cleanupCallbacks;
+
+        QHash<QString, void *> _connections;
+        QSet<QString> _pendingDomains;
+        bool _discoveryPending = false;
         // Keys are FileProvider domain identifiers, values are NSObject<ClientCommunicationProtocol>*
         QHash<QString, void *> _clientCommServices;
         bool _reconnectPending = false;

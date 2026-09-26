@@ -55,6 +55,9 @@
  */
 - (void)removeAccountConfig;
 
+/** Acknowledge only after persisted credentials and domain state are cleared. */
+- (void)removeAccountConfigWithCompletionHandler:(void (^)(NSError *error))completionHandler;
+
 @end
 
 #endif /* ClientCommunicationProtocol_h */

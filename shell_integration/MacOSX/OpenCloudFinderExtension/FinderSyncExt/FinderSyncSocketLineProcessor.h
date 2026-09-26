@@ -25,12 +25,13 @@
 - (void)resetMenuItems;
 - (void)addMenuItem:(NSDictionary *)item;
 - (void)menuHasCompleted;
+- (void)connectionDidOpen;
 - (void)connectionDidDie;
 
 @end
 
-/// This class is in charge of dispatching all work that must be done on the UI side of the extension.
-/// Tasks are dispatched on the main UI thread for this reason.
+/// Finder UI updates run on the main queue. Menu replies run on the socket queue
+/// because Finder waits for them; the delegate protects menu state with a condition.
 ///
 /// These tasks are parsed from byte data (UTF8 strings) acquired from the socket; look at the
 /// LocalSocketClient for more detail on how data is read from and written to the socket.

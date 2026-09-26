@@ -28,6 +28,8 @@
     NSMutableDictionary *_strings;
     NSMutableArray *_menuItems;
     NSCondition *_menuIsComplete;
+    BOOL _menuReady;
+    BOOL _menuRequestPending;
 }
 @end
 
@@ -38,6 +40,9 @@
     self = [super init];
 
     if (self) {
+        _registeredDirectories = NSMutableSet.set;
+        _strings = NSMutableDictionary.dictionary;
+        _menuIsComplete = [[NSCondition alloc] init];
         FIFinderSyncController *syncController = [FIFinderSyncController defaultController];
         NSBundle *extBundle = [NSBundle bundleForClass:[self class]];
         // This was added to the bundle's Info.plist to get it from the build system
@@ -112,15 +117,10 @@
             self.localSocketClient = [[LocalSocketClient alloc] initWithSocketPath:socketPath.path
                                                                      lineProcessor:self.lineProcessor];
             [self.localSocketClient start];
-            [self.localSocketClient askOnSocket:@"" query:@"GET_STRINGS"];
         } else {
             NSLog(@"FinderSync: No socket path. Not initiating local socket client.");
             self.localSocketClient = nil;
         }
-
-        _registeredDirectories = NSMutableSet.set;
-        _strings = NSMutableDictionary.dictionary;
-        _menuIsComplete = [[NSCondition alloc] init];
     }
 
     return self;
@@ -156,13 +156,6 @@
     return string;
 }
 
-- (void)waitForMenuToArrive
-{
-    [_menuIsComplete lock];
-    [_menuIsComplete wait];
-    [_menuIsComplete unlock];
-}
-
 - (NSMenu *)menuForMenuKind:(FIMenuKind)whichMenu
 {
     if (![self.localSocketClient isConnected]) {
@@ -185,34 +178,45 @@
     }];
 
     NSString *paths = [self selectedPathsSeparatedByRecordSeparator];
+    [_menuIsComplete lock];
+    // Do not confuse a late reply from a timed-out request with a new selection.
+    if (_menuRequestPending) {
+        [_menuIsComplete unlock];
+        return nil;
+    }
+    _menuRequestPending = YES;
+    _menuReady = NO;
+    _menuItems = [NSMutableArray array];
     [self.localSocketClient askOnSocket:paths query:@"GET_MENU_ITEMS"];
-
-    // Since the LocalSocketClient communicates asynchronously, wait here until the menu
-    // is delivered by another thread
-    [self waitForMenuToArrive];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:1.0];
+    while (!_menuReady && [_menuIsComplete waitUntilDate:deadline]) { }
+    NSArray *menuItems = _menuReady ? [_menuItems copy] : @[];
+    BOOL timedOut = !_menuReady;
+    [_menuIsComplete unlock];
+    if (timedOut) {
+        // Drop this connection so a late response cannot become the next menu.
+        [self.localSocketClient restart];
+        return nil;
+    }
 
     id contextMenuTitle = [_strings objectForKey:@"CONTEXT_MENU_TITLE"];
-    if (contextMenuTitle && !onlyRootsSelected) {
+    if (contextMenuTitle && !onlyRootsSelected && menuItems.count > 0) {
         NSMenu *menu = [[NSMenu alloc] initWithTitle:@""];
         NSMenu *subMenu = [[NSMenu alloc] initWithTitle:@""];
         NSMenuItem *subMenuItem = [menu addItemWithTitle:contextMenuTitle action:nil keyEquivalent:@""];
         subMenuItem.submenu = subMenu;
         subMenuItem.image = [[NSBundle mainBundle] imageForResource:@"app.icns"];
 
-        // There is an annoying bug in macOS (at least 10.13.3), it does not use/copy over the representedObject of a menu item
-        // So we have to use tag instead.
-        int idx = 0;
-        for (NSArray *item in _menuItems) {
+        for (NSDictionary *item in menuItems) {
             NSMenuItem *actionItem = [subMenu addItemWithTitle:[item valueForKey:@"text"]
                                                         action:@selector(subMenuActionClicked:)
                                                  keyEquivalent:@""];
-            [actionItem setTag:idx];
+            actionItem.representedObject = @{@"command" : item[@"command"], @"paths" : paths};
             [actionItem setTarget:self];
             NSString *flags = [item valueForKey:@"flags"]; // e.g. "d"
             if ([flags rangeOfString:@"d"].location != NSNotFound) {
                 [actionItem setEnabled:false];
             }
-            idx++;
         }
         return menu;
     }
@@ -221,10 +225,8 @@
 
 - (void)subMenuActionClicked:(id)sender
 {
-    long idx = [(NSMenuItem *)sender tag];
-    NSString *command = [[_menuItems objectAtIndex:idx] valueForKey:@"command"];
-    NSString *paths = [self selectedPathsSeparatedByRecordSeparator];
-    [self.localSocketClient askOnSocket:paths query:command];
+    NSDictionary *action = [(NSMenuItem *)sender representedObject];
+    [self.localSocketClient askOnSocket:action[@"paths"] query:action[@"command"]];
 }
 
 #pragma mark - Helper methods
@@ -295,34 +297,55 @@
 
 - (void)resetMenuItems
 {
-    _menuItems = [[NSMutableArray alloc] init];
+    [_menuIsComplete lock];
+    _menuItems = [NSMutableArray array];
+    [_menuIsComplete unlock];
 }
 
 - (void)addMenuItem:(NSDictionary *)item
 {
-    [_menuItems addObject:item];
+    [_menuIsComplete lock];
+    if (_menuRequestPending) {
+        [_menuItems addObject:item];
+    }
+    [_menuIsComplete unlock];
 }
 
 - (void)menuHasCompleted
 {
     // Signal that the menu is ready
     [_menuIsComplete lock];
+    _menuReady = YES;
+    _menuRequestPending = NO;
     [_menuIsComplete signal];
     [_menuIsComplete unlock];
 }
 
+- (void)connectionDidOpen
+{
+    [self.localSocketClient askOnSocket:@"" query:@"GET_STRINGS"];
+}
+
 - (void)connectionDidDie
 {
-    NSLog(@"FinderSync: Connection to main app died");
-    [_strings removeAllObjects];
-    [_registeredDirectories removeAllObjects];
-    // For some reason the FIFinderSync cache doesn't seem to be cleared for the root item when
-    // we reset the directoryURLs (seen on macOS 10.12 at least).
-    // First setting it to the FS root and then setting it to nil seems to work around the issue.
-    [FIFinderSyncController defaultController].directoryURLs = [NSSet setWithObject:[NSURL fileURLWithPath:@"/"]];
-    // This will tell Finder that this extension isn't attached to any directory
-    // until we can reconnect to the sync client.
-    [FIFinderSyncController defaultController].directoryURLs = nil;
+    [_menuIsComplete lock];
+    _menuItems = [NSMutableArray array];
+    _menuReady = YES;
+    _menuRequestPending = NO;
+    [_menuIsComplete signal];
+    [_menuIsComplete unlock];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSLog(@"FinderSync: Connection to main app died");
+        [self->_strings removeAllObjects];
+        [self->_registeredDirectories removeAllObjects];
+        // For some reason the FIFinderSync cache doesn't seem to be cleared for the root item when
+        // we reset the directoryURLs (seen on macOS 10.12 at least).
+        // First setting it to the FS root and then setting it to nil seems to work around the issue.
+        [FIFinderSyncController defaultController].directoryURLs = [NSSet setWithObject:[NSURL fileURLWithPath:@"/"]];
+        // This will tell Finder that this extension isn't attached to any directory
+        // until we can reconnect to the sync client.
+        [FIFinderSyncController defaultController].directoryURLs = nil;
+    });
 }
 
 @end

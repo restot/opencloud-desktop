@@ -53,262 +53,151 @@ FileProviderXPC::FileProviderXPC(QObject *parent)
     _credentialRefreshTimer->setInterval(4 * 60 * 1000); // 4 minutes
     connect(_credentialRefreshTimer, &QTimer::timeout, this, &FileProviderXPC::refreshCredentials);
     _credentialRefreshTimer->start();
+    auto watchAccount = [this](const AccountStatePtr &state) {
+        connect(state.data(), &AccountState::stateChanged, this, &FileProviderXPC::slotAccountStateChanged, Qt::UniqueConnection);
+        const auto domainId = state->account()->uuid().toString(QUuid::WithoutBraces);
+        connect(state->account().data(), &Account::credentialsFetched, this, [this, domainId] { authenticateFileProviderDomain(domainId); });
+        connect(state->account()->spacesManager(), &GraphApi::SpacesManager::updated, this, [this, domainId] { authenticateFileProviderDomain(domainId); });
+    };
+    connect(AccountManager::instance(), &AccountManager::accountAdded, this, watchAccount);
+    for (const auto &state : AccountManager::instance()->accounts()) {
+        watchAccount(state);
+    }
 }
 
 FileProviderXPC::~FileProviderXPC()
 {
-    // Release retained Objective-C objects
-    for (auto it = _clientCommServices.begin(); it != _clientCommServices.end(); ++it) {
-        if (it.value()) {
-            (void)(__bridge_transfer id)it.value();
-        }
+    clearConnections();
+}
+
+void FileProviderXPC::clearConnections()
+{
+    for (void *ptr : std::as_const(_connections)) {
+        NSXPCConnection *connection = (__bridge_transfer NSXPCConnection *)ptr;
+        connection.invalidationHandler = nil;
+        connection.interruptionHandler = nil;
+        [connection invalidate];
+    }
+    _connections.clear();
+    for (void *ptr : std::as_const(_clientCommServices)) {
+        (void)(__bridge_transfer id)ptr;
     }
     _clientCommServices.clear();
 }
 
 void FileProviderXPC::connectToFileProviderDomains()
 {
-    NSLog(@"OpenCloud XPC: connectToFileProviderDomains() called");
-    qCInfo(lcFileProviderXPC) << "Connecting to file provider domains...";
-    
-    if (@available(macOS 11.0, *)) {
-        dispatch_group_t group = dispatch_group_create();
-        dispatch_group_enter(group);
-        
-        [NSFileProviderManager getDomainsWithCompletionHandler:^(NSArray<NSFileProviderDomain *> *domains, NSError *error) {
-            NSLog(@"OpenCloud XPC: getDomainsWithCompletionHandler callback, error=%@, count=%lu", error, (unsigned long)domains.count);
-            
-            // If getDomainsWithCompletionHandler fails (common after restart), use URL-based discovery
-            NSMutableArray<NSFileProviderDomain *> *domainsToProcess = [NSMutableArray array];
-            
-            if (error || domains.count == 0) {
-                qCInfo(lcFileProviderXPC) << "getDomainsWithCompletionHandler failed, using URL-based discovery";
-                
-                // Use the CloudStorage URL to access the extension's service directly
-                NSFileManager *fm = [NSFileManager defaultManager];
-                NSURL *cloudStorageURL = [fm URLForDirectory:NSLibraryDirectory 
-                                                  inDomain:NSUserDomainMask 
-                                         appropriateForURL:nil 
-                                                    create:NO 
-                                                     error:nil];
-                cloudStorageURL = [cloudStorageURL URLByAppendingPathComponent:@"CloudStorage"];
-                
-                NSArray *contents = [fm contentsOfDirectoryAtURL:cloudStorageURL 
-                                      includingPropertiesForKeys:nil 
-                                                         options:NSDirectoryEnumerationSkipsHiddenFiles 
-                                                           error:nil];
-                
-                for (NSURL *folderURL in contents) {
-                    NSString *folderName = [folderURL lastPathComponent];
-                    // Look for folders starting with "OpenCloud-" which are our domains
-                    if ([folderName hasPrefix:@"OpenCloud-"]) {
-                        NSLog(@"OpenCloud XPC: Found CloudStorage folder: %@", folderName);
-                        
-                        // Get services from this folder
-                        dispatch_group_enter(group);
-                        [fm getFileProviderServicesForItemAtURL:folderURL
-                                              completionHandler:^(NSDictionary<NSFileProviderServiceName, NSFileProviderService *> *services, NSError *svcError) {
-                            if (svcError) {
-                                NSLog(@"OpenCloud XPC: Error getting services from URL: %@", svcError);
-                                dispatch_group_leave(group);
-                                return;
-                            }
-                            
-                            NSFileProviderService *service = services[clientCommunicationServiceName];
-                            if (!service) {
-                                NSLog(@"OpenCloud XPC: ClientCommunicationService not found at URL");
-                                dispatch_group_leave(group);
-                                return;
-                            }
-                            
-                            NSLog(@"OpenCloud XPC: Found ClientCommunicationService, getting connection...");
-                            [service getFileProviderConnectionWithCompletionHandler:^(NSXPCConnection *connection, NSError *connError) {
-                                if (connError || !connection) {
-                                    NSLog(@"OpenCloud XPC: Error getting connection: %@", connError);
-                                    dispatch_group_leave(group);
-                                    return;
-                                }
-                                
-                                connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(ClientCommunicationProtocol)];
-                                connection.invalidationHandler = ^{
-                                    NSLog(@"OpenCloud XPC: URL-based connection invalidated");
-                                    QMetaObject::invokeMethod(this, &FileProviderXPC::reconnectAfterInvalidation, Qt::QueuedConnection);
-                                };
-                                [connection resume];
-
-                                id<ClientCommunicationProtocol> proxy = [connection remoteObjectProxyWithErrorHandler:^(NSError *proxyError) {
-                                    NSLog(@"OpenCloud XPC: Proxy error: %@", proxyError);
-                                }];
-
-                                if (proxy) {
-                                    [proxy getFileProviderDomainIdentifierWithCompletionHandler:^(NSString *extDomainId, NSError *idError) {
-                                        if (!idError && extDomainId) {
-                                            QString qDomainId = QString::fromNSString(extDomainId);
-                                            NSLog(@"OpenCloud XPC: Connected to domain via URL: %s", qDomainId.toUtf8().constData());
-                                            _clientCommServices.insert(qDomainId, (__bridge_retained void *)proxy);
-                                        }
-                                        dispatch_group_leave(group);
-                                    }];
-                                } else {
-                                    dispatch_group_leave(group);
-                                }
-                            }];
-                        }];
-                    }
-                }
-            } else {
-                [domainsToProcess addObjectsFromArray:domains];
+    if (_discoveryPending) {
+        return;
+    }
+    _discoveryPending = true;
+    const QPointer<FileProviderXPC> guard(this);
+    [NSFileProviderManager getDomainsWithCompletionHandler:^(NSArray<NSFileProviderDomain *> *domains, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!guard) {
+                return;
             }
-            
-            NSLog(@"OpenCloud XPC: Processing %lu domains", (unsigned long)domainsToProcess.count);
-            qCInfo(lcFileProviderXPC) << "Found" << domainsToProcess.count << "file provider domains";
-            
-            for (NSFileProviderDomain *domain in domainsToProcess) {
-                NSString *domainId = domain.identifier;
-                qCInfo(lcFileProviderXPC) << "Processing domain:" << QString::fromNSString(domainId);
-                
-                NSFileProviderManager *manager = [NSFileProviderManager managerForDomain:domain];
-                if (!manager) {
-                    qCWarning(lcFileProviderXPC) << "Could not get manager for domain:" << QString::fromNSString(domainId);
+            guard->_discoveryPending = false;
+            if (error) {
+                qCWarning(lcFileProviderXPC) << "Could not discover FileProvider domains:" << QString::fromNSString(error.localizedDescription);
+                QTimer::singleShot(3000, guard, &FileProviderXPC::connectToFileProviderDomains);
+                return;
+            }
+            for (NSFileProviderDomain *domain in domains) {
+                const auto domainId = QString::fromNSString(domain.identifier);
+                if (guard->_clientCommServices.contains(domainId) || guard->_pendingDomains.contains(domainId)) {
                     continue;
                 }
-                
-                dispatch_group_enter(group);
-                
-                if (@available(macOS 13.0, *)) {
-                    // macOS 13+ API
-                    NSLog(@"OpenCloud XPC: Calling getServiceWithName:%@ for domain:%@", clientCommunicationServiceName, domainId);
-                    [manager getServiceWithName:clientCommunicationServiceName
-                                 itemIdentifier:NSFileProviderRootContainerItemIdentifier
-                              completionHandler:^(NSFileProviderService *service, NSError *serviceError) {
-                        NSLog(@"OpenCloud XPC: getServiceWithName callback: service=%@, error=%@", service, serviceError);
-                        if (serviceError || !service) {
-                            qCWarning(lcFileProviderXPC) << "Error getting service for domain:" 
-                                                         << QString::fromNSString(domainId)
-                                                         << (serviceError ? QString::fromNSString(serviceError.localizedDescription) : QStringLiteral("service is nil"));
-                            dispatch_group_leave(group);
+                NSFileProviderManager *manager = [NSFileProviderManager managerForDomain:domain];
+                if (!manager) {
+                    continue;
+                }
+                guard->_pendingDomains.insert(domainId);
+                auto failed = ^(NSError *failure) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if (guard) {
+                            guard->_pendingDomains.remove(domainId);
+                            qCWarning(lcFileProviderXPC)
+                                << "FileProvider connection failed for" << domainId << QString::fromNSString(failure.localizedDescription);
+                            const auto account = FileProviderDomainManager::accountStateFromDomainIdentifier(domainId);
+                            if (account && !account->isSignedOut()) {
+                                QTimer::singleShot(3000, guard, &FileProviderXPC::connectToFileProviderDomains);
+                            }
+                        }
+                    });
+                };
+                auto serviceReady = ^(NSFileProviderService *service, NSError *serviceError) {
+                    if (serviceError || !service) {
+                        failed(serviceError);
+                        return;
+                    }
+                    [service getFileProviderConnectionWithCompletionHandler:^(NSXPCConnection *connection, NSError *connectionError) {
+                        if (connectionError || !connection) {
+                            failed(connectionError);
                             return;
                         }
-                        
-                        [service getFileProviderConnectionWithCompletionHandler:^(NSXPCConnection *connection, NSError *connError) {
-                            if (connError || !connection) {
-                                qCWarning(lcFileProviderXPC) << "Error getting XPC connection for domain:"
-                                                             << QString::fromNSString(domainId);
-                                dispatch_group_leave(group);
-                                return;
-                            }
-                            
-                            // Configure the connection
-                            connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(ClientCommunicationProtocol)];
-                            connection.interruptionHandler = ^{
-                                qCInfo(lcFileProviderXPC) << "XPC connection interrupted for domain:" << QString::fromNSString(domainId);
-                            };
-                            connection.invalidationHandler = ^{
-                                qCInfo(lcFileProviderXPC) << "XPC connection invalidated for domain:" << QString::fromNSString(domainId);
-                                // Extension process was replaced — schedule reconnection
-                                QMetaObject::invokeMethod(this, &FileProviderXPC::reconnectAfterInvalidation, Qt::QueuedConnection);
-                            };
-                            [connection resume];
-                            
-                            // Get the remote object proxy
-                            id<ClientCommunicationProtocol> proxy = [connection remoteObjectProxyWithErrorHandler:^(NSError *proxyError) {
-                                qCWarning(lcFileProviderXPC) << "Error getting remote object proxy:" 
-                                                             << QString::fromNSString(proxyError.localizedDescription);
-                            }];
-                            
-                            if (proxy) {
-                                // Get the domain identifier from the extension
-                                [proxy getFileProviderDomainIdentifierWithCompletionHandler:^(NSString *extDomainId, NSError *idError) {
-                                    if (idError || !extDomainId) {
-                                        qCWarning(lcFileProviderXPC) << "Could not get domain identifier from extension";
-                                        dispatch_group_leave(group);
-                                        return;
-                                    }
-
-                                    QString qDomainId = QString::fromNSString(extDomainId);
-                                    qCInfo(lcFileProviderXPC) << "Connected to domain:" << qDomainId;
-
-                                    _clientCommServices.insert(qDomainId, (__bridge_retained void *)proxy);
-                                    dispatch_group_leave(group);
-                                }];
-                            } else {
-                                dispatch_group_leave(group);
-                            }
+                        connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(ClientCommunicationProtocol)];
+                        connection.invalidationHandler = ^{
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                if (guard) {
+                                    guard->_pendingDomains.remove(domainId);
+                                    guard->reconnectAfterInvalidation();
+                                }
+                            });
+                        };
+                        [connection resume];
+                        id<ClientCommunicationProtocol> proxy = [connection remoteObjectProxyWithErrorHandler:failed];
+                        [proxy getFileProviderDomainIdentifierWithCompletionHandler:^(NSString *extensionDomainId, NSError *idError) {
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                if (!guard) {
+                                    [connection invalidate];
+                                    return;
+                                }
+                                guard->_pendingDomains.remove(domainId);
+                                // Bind a service to the domain requested from the system before sending credentials.
+                                if (idError || QString::fromNSString(extensionDomainId) != domainId) {
+                                    connection.invalidationHandler = nil;
+                                    [connection invalidate];
+                                    return;
+                                }
+                                if (guard->_clientCommServices.contains(domainId)) {
+                                    connection.invalidationHandler = nil;
+                                    [connection invalidate];
+                                    return;
+                                }
+                                guard->_connections.insert(domainId, (__bridge_retained void *)connection);
+                                guard->_clientCommServices.insert(domainId, (__bridge_retained void *)proxy);
+                                Q_EMIT guard->domainConnected(domainId);
+                                guard->authenticateFileProviderDomain(domainId);
+                            });
                         }];
                     }];
+                };
+                if (@available(macOS 13.0, *)) {
+                    [manager getServiceWithName:clientCommunicationServiceName
+                                 itemIdentifier:NSFileProviderRootContainerItemIdentifier
+                              completionHandler:serviceReady];
                 } else {
-                    // macOS 11-12: Use URL-based service discovery
                     [manager getUserVisibleURLForItemIdentifier:NSFileProviderRootContainerItemIdentifier
                                               completionHandler:^(NSURL *url, NSError *urlError) {
                         if (urlError || !url) {
-                            qCWarning(lcFileProviderXPC) << "Could not get user visible URL for domain";
-                            dispatch_group_leave(group);
+                            failed(urlError);
                             return;
                         }
-                        
-                        [NSFileManager.defaultManager getFileProviderServicesForItemAtURL:url
-                                                                        completionHandler:^(NSDictionary<NSFileProviderServiceName, NSFileProviderService *> *services, NSError *svcError) {
-                            if (svcError || !services) {
-                                qCWarning(lcFileProviderXPC) << "Could not get services at URL";
-                                dispatch_group_leave(group);
-                                return;
-                            }
-                            
-                            NSFileProviderService *service = services[clientCommunicationServiceName];
-                            if (!service) {
-                                qCWarning(lcFileProviderXPC) << "ClientCommunicationService not found";
-                                dispatch_group_leave(group);
-                                return;
-                            }
-                            
-                            [service getFileProviderConnectionWithCompletionHandler:^(NSXPCConnection *connection, NSError *connError) {
-                                if (connError || !connection) {
-                                    qCWarning(lcFileProviderXPC) << "Error getting XPC connection";
-                                    dispatch_group_leave(group);
-                                    return;
-                                }
-                                
-                                connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(ClientCommunicationProtocol)];
-                                [connection resume];
-                                
-                                id<ClientCommunicationProtocol> proxy = [connection remoteObjectProxyWithErrorHandler:^(NSError *proxyError) {
-                                    qCWarning(lcFileProviderXPC) << "Proxy error:" << QString::fromNSString(proxyError.localizedDescription);
-                                }];
-                                
-                                if (proxy) {
-                                    [proxy getFileProviderDomainIdentifierWithCompletionHandler:^(NSString *extDomainId, NSError *idError) {
-                                        if (!idError && extDomainId) {
-                                            QString qDomainId = QString::fromNSString(extDomainId);
-                                            _clientCommServices.insert(qDomainId, (__bridge_retained void *)proxy);
-                                        }
-                                        dispatch_group_leave(group);
-                                    }];
-                                } else {
-                                    dispatch_group_leave(group);
-                                }
-                            }];
-                        }];
+                        [NSFileManager.defaultManager
+                            getFileProviderServicesForItemAtURL:url
+                                              completionHandler:^(NSDictionary<NSFileProviderServiceName, NSFileProviderService *> *services,
+                                                  NSError *servicesError) { serviceReady(services[clientCommunicationServiceName], servicesError); }];
                     }];
                 }
             }
-            
-            dispatch_group_leave(group);
-        }];
-        
-        // Non-blocking: authenticate all domains once connections are established.
-        // Using dispatch_group_wait here would block the Qt main thread, deadlocking
-        // against FileProvider completion handlers that also need the main thread.
-        dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-            qCInfo(lcFileProviderXPC) << "Connected to" << _clientCommServices.count() << "file provider domains";
-            NSLog(@"OpenCloud XPC: Connected to %d file provider domains", _clientCommServices.count());
-            authenticateFileProviderDomains();
         });
-    }
+    }];
 }
 
 void FileProviderXPC::authenticateFileProviderDomains()
 {
-    NSLog(@"OpenCloud XPC: authenticateFileProviderDomains() called, services count=%d", _clientCommServices.count());
+    NSLog(@"OpenCloud XPC: authenticateFileProviderDomains() called, services count=%lld", static_cast<long long>(_clientCommServices.count()));
     qCInfo(lcFileProviderXPC) << "Authenticating all file provider domains...";
     
     for (const auto &domainId : _clientCommServices.keys()) {
@@ -321,18 +210,27 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
 {
     NSLog(@"OpenCloud XPC: authenticateFileProviderDomain() start: %s", domainIdentifier.toUtf8().constData());
     qCInfo(lcFileProviderXPC) << "Authenticating domain:" << domainIdentifier;
+    if (_cleanupCallbacks.contains(domainIdentifier)) {
+        return;
+    }
 
     // Find the account for this domain
     const auto accountState = FileProviderDomainManager::accountStateFromDomainIdentifier(domainIdentifier);
     if (!accountState) {
         NSLog(@"OpenCloud XPC: No account found for domain: %s", domainIdentifier.toUtf8().constData());
         qCWarning(lcFileProviderXPC) << "No account found for domain:" << domainIdentifier;
+        Q_EMIT domainConnected(domainIdentifier);
         return;
     }
 
     // Always connect to account state changes so we retry when token becomes available
     connect(accountState.data(), &AccountState::stateChanged,
             this, &FileProviderXPC::slotAccountStateChanged, Qt::UniqueConnection);
+
+    if (accountState->isSignedOut()) {
+        unauthenticateFileProviderDomain(domainIdentifier);
+        return;
+    }
 
     const auto account = accountState->account();
     if (!account) {
@@ -385,7 +283,8 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
         }
     }
     if (davPath.length == 0) {
-        qCInfo(lcFileProviderXPC) << "No personal space found, extension will use legacy /remote.php/webdav";
+        qCInfo(lcFileProviderXPC) << "Waiting for personal space discovery before configuring domain:" << domainIdentifier;
+        return;
     }
 
     // Current code only reaches here for HttpCredentials with a valid OAuth access token
@@ -426,16 +325,77 @@ void FileProviderXPC::authenticateFileProviderDomain(const QString &domainIdenti
 
 void FileProviderXPC::unauthenticateFileProviderDomain(const QString &domainIdentifier)
 {
-    qCInfo(lcFileProviderXPC) << "Unauthenticating domain:" << domainIdentifier;
-    
-    void *servicePtr = _clientCommServices.value(domainIdentifier);
-    if (!servicePtr) {
-        qCWarning(lcFileProviderXPC) << "No service connection for domain:" << domainIdentifier;
+    clearAccountConfiguration(domainIdentifier, {});
+}
+
+void FileProviderXPC::closeConnection(const QString &domainIdentifier)
+{
+    if (void *ptr = _clientCommServices.take(domainIdentifier)) {
+        (void)(__bridge_transfer id)ptr;
+    }
+    if (void *ptr = _connections.take(domainIdentifier)) {
+        NSXPCConnection *connection = (__bridge_transfer NSXPCConnection *)ptr;
+        connection.invalidationHandler = nil;
+        [connection invalidate];
+    }
+}
+
+void FileProviderXPC::clearAccountConfiguration(const QString &domainIdentifier, std::function<void(bool)> completion)
+{
+    const bool pending = _cleanupCallbacks.contains(domainIdentifier);
+    _cleanupCallbacks[domainIdentifier].append(std::move(completion));
+    if (pending) {
         return;
     }
-    
-    NSObject<ClientCommunicationProtocol> *service = (__bridge NSObject<ClientCommunicationProtocol> *)servicePtr;
-    [service removeAccountConfig];
+    void *ptr = _clientCommServices.value(domainIdentifier);
+    if (!ptr) {
+        finishClearingAccount(domainIdentifier, false);
+        return;
+    }
+    const QPointer<FileProviderXPC> guard(this);
+    const auto completed = std::make_shared<bool>(false);
+    auto finish = [guard, domainIdentifier, completed](bool success) {
+        // Both the native reply and deadline are delivered on the main queue.
+        // A late reply must never complete a newer cleanup request for this domain.
+        if (*completed) {
+            // A delayed server-side clear may finish after the user signs back in.
+            // Restore current credentials without completing another request.
+            if (success && guard) {
+                const auto account = FileProviderDomainManager::accountStateFromDomainIdentifier(domainIdentifier);
+                if (account && !account->isSignedOut()) {
+                    guard->authenticateFileProviderDomain(domainIdentifier);
+                }
+            }
+            return;
+        }
+        *completed = true;
+        if (guard) {
+            guard->finishClearingAccount(domainIdentifier, success);
+        }
+    };
+    NSObject<ClientCommunicationProtocol> *service = (__bridge NSObject<ClientCommunicationProtocol> *)ptr;
+    [service removeAccountConfigWithCompletionHandler:^(NSError *error) { dispatch_async(dispatch_get_main_queue(), ^{ finish(error == nil); }); }];
+    QTimer::singleShot(3000, this, [finish] { finish(false); });
+}
+
+void FileProviderXPC::finishClearingAccount(const QString &domainIdentifier, bool success)
+{
+    if (!_cleanupCallbacks.contains(domainIdentifier)) {
+        return;
+    }
+    if (!success) {
+        qCWarning(lcFileProviderXPC) << "Credential removal was not acknowledged for domain:" << domainIdentifier;
+    }
+    const auto callbacks = _cleanupCallbacks.take(domainIdentifier);
+    for (const auto &callback : callbacks) {
+        if (callback) {
+            callback(success);
+        }
+    }
+    const auto account = FileProviderDomainManager::accountStateFromDomainIdentifier(domainIdentifier);
+    if (account && !account->isSignedOut()) {
+        authenticateFileProviderDomain(domainIdentifier);
+    }
 }
 
 bool FileProviderXPC::fileProviderDomainReachable(const QString &domainIdentifier)
@@ -473,7 +433,7 @@ void FileProviderXPC::slotAccountStateChanged(AccountState::State state)
 
     switch (state) {
     case AccountState::SignedOut:
-        unauthenticateFileProviderDomain(domainId);
+        // The domain manager clears credentials before disconnecting the domain.
         break;
     case AccountState::Disconnected:
         // Don't unauthenticate on transient disconnections (network hiccup,
@@ -505,13 +465,7 @@ void FileProviderXPC::reconnectAfterInvalidation()
 
     qCInfo(lcFileProviderXPC) << "XPC connection invalidated, scheduling reconnection in 3 seconds";
 
-    // Clear stale connections
-    for (auto it = _clientCommServices.begin(); it != _clientCommServices.end(); ++it) {
-        if (it.value()) {
-            (void)(__bridge_transfer id)it.value();
-        }
-    }
-    _clientCommServices.clear();
+    clearConnections();
 
     // Delay to allow the new extension process to start.
     // connectToFileProviderDomains is non-blocking and auto-authenticates
@@ -525,9 +479,7 @@ void FileProviderXPC::reconnectAfterInvalidation()
 
 void FileProviderXPC::refreshCredentials()
 {
-    if (_clientCommServices.isEmpty()) {
-        return;
-    }
+    connectToFileProviderDomains();
     qCDebug(lcFileProviderXPC) << "Periodic credential refresh for" << _clientCommServices.count() << "domains";
     authenticateFileProviderDomains();
 }

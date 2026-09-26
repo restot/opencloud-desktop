@@ -15,6 +15,7 @@
 import Foundation
 import FileProvider
 import OSLog
+import Security
 
 /// Service that allows the main app to communicate with the FileProvider extension via XPC.
 /// The main app uses NSFileProviderManager.getService() to connect to this service.
@@ -47,8 +48,25 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
     // MARK: - NSXPCListenerDelegate
     
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection) -> Bool {
-        NSLog("[FileProviderExt] shouldAcceptNewConnection - accepting XPC from main app")
-        logger.debug("Accepting new XPC connection")
+        // FileProvider service endpoints can be requested by other applications.
+        // Only the signed containing app may configure credentials or erase state.
+        let appURL = Bundle.main.bundleURL.deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        guard let identifier = Bundle(url: appURL)?.bundleIdentifier,
+              let team = FileProviderExtension.getTeamIdentifierFromEntitlements(),
+              identifier.range(of: "^[A-Za-z0-9.-]+$", options: .regularExpression) != nil,
+              team.range(of: "^[A-Za-z0-9]+$", options: .regularExpression) != nil else {
+            logger.error("Rejecting XPC connection: signed containing app identity unavailable")
+            return false
+        }
+        let requirement = "anchor apple generic and identifier \"\(identifier)\" and certificate leaf[subject.OU] = \"\(team)\""
+        var parsedRequirement: SecRequirement?
+        guard SecRequirementCreateWithString(requirement as CFString, [], &parsedRequirement) == errSecSuccess else {
+            logger.error("Rejecting XPC connection: invalid signing requirement")
+            return false
+        }
+        newConnection.setCodeSigningRequirement(requirement)
+        logger.debug("Accepting XPC connection subject to containing app signing requirement")
         newConnection.exportedInterface = NSXPCInterface(with: ClientCommunicationProtocol.self)
         newConnection.exportedObject = self
         newConnection.resume()
@@ -82,5 +100,9 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
     func removeAccountConfig() {
         logger.info("Received request to remove account configuration")
         fpExtension.removeAccountConfig()
+    }
+
+    func removeAccountConfig(completionHandler: @escaping (Error?) -> Void) {
+        fpExtension.removeAccountConfig(completionHandler: completionHandler)
     }
 }

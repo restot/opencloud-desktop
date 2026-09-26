@@ -51,6 +51,18 @@ opencloud_add_test(LongPath)
 opencloud_add_test(FolderMan)
 opencloud_add_test(SyncProviderSelection)
 
+if(APPLE)
+    opencloud_add_test(MacSocketApi)
+    target_sources(testmacsocketapi PRIVATE
+        ../src/gui/socketapi/socketapisocket_mac.mm
+        ../src/gui/socketapi/socketapisocket_mac.h)
+    foreach(suite database webdav sockets)
+        add_test(NAME testfileprovider_${suite}
+            COMMAND bash "${PROJECT_SOURCE_DIR}/tools/test-fileprovider-${suite}.sh")
+        set_tests_properties(testfileprovider_${suite} PROPERTIES TIMEOUT 120)
+    endforeach()
+endif()
+
 opencloud_add_test(OAuth)
 
 configure_file(test_journal.db "${PROJECT_BINARY_DIR}/bin/test_journal.db" COPYONLY)

@@ -16,6 +16,10 @@
 /// @param line The line to process (without trailing newline).
 - (void)process:(NSString *)line;
 
+@optional
+- (void)connectionDidOpen;
+- (void)connectionDidClose;
+
 @end
 
 #endif /* LineProcessor_h */

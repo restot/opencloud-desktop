@@ -13,6 +13,7 @@
  */
 
 import FileProvider
+import CryptoKit
 import UniformTypeIdentifiers
 
 /// Implementation of NSFileProviderItem protocol representing a file or folder.
@@ -64,12 +65,8 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
         }
 
         // NV = renameable, moveable
-        if perms.contains("N") || perms.contains("V") {
-            caps.formUnion([.allowsRenaming, .allowsReparenting])
-            if contentType == .folder {
-                caps.insert(.allowsAddingSubItems)
-            }
-        }
+        if perms.contains("N") { caps.insert(.allowsRenaming) }
+        if perms.contains("V") { caps.insert(.allowsReparenting) }
 
         // CK = folder allows adding sub-items
         if (perms.contains("C") || perms.contains("K")), contentType == .folder {
@@ -87,10 +84,16 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
     var itemVersion: NSFileProviderItemVersion {
         // Use ETag for content version (consistent with server)
         let contentData = _etag.data(using: .utf8) ?? Data()
-        // Include download state in metadata version so Finder refreshes after download
-        let metadataString = "\(_etag):\(_isDownloaded ? "1" : "0")"
-        let metadataData = metadataString.data(using: .utf8) ?? Data()
-        return NSFileProviderItemVersion(contentVersion: contentData, metadataVersion: metadataData)
+        // ETags describe content; rename, permissions and transfer state can
+        // change independently and must invalidate the metadata version too.
+        let values = [_etag, filename, parentItemIdentifier.rawValue, _permissions,
+                      contentType.identifier, documentSize?.stringValue ?? "",
+                      creationDate.map { String($0.timeIntervalSince1970) } ?? "",
+                      contentModificationDate.map { String($0.timeIntervalSince1970) } ?? "",
+                      String(_isDownloaded), String(_isDownloading), String(_isUploaded), String(_isUploading)]
+        let metadataData = (try? JSONSerialization.data(withJSONObject: values)) ?? Data()
+        // FileProvider limits each version component to 128 bytes.
+        return NSFileProviderItemVersion(contentVersion: contentData, metadataVersion: Data(SHA256.hash(data: metadataData)))
     }
     
     // MARK: - Download/Upload State
@@ -125,14 +128,16 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
             self.contentType = UTType(filenameExtension: ext) ?? .data
         }
         
-        self.documentSize = metadata.size > 0 ? NSNumber(value: metadata.size) : nil
+        self.documentSize = metadata.isDirectory ? nil : NSNumber(value: metadata.size)
         // Use current date as fallback if server didn't provide dates
         self.creationDate = metadata.creationDate ?? metadata.syncTime
         self.contentModificationDate = metadata.lastModified ?? metadata.syncTime
         // Use stable deterministic fallback when server doesn't provide ETag.
         // Random UUIDs cause contentVersion to differ every time the item is
         // constructed, making the system think content constantly changes.
-        self._etag = metadata.etag.isEmpty ? "stable-\(metadata.ocId)" : metadata.etag
+        self._etag = metadata.etag.isEmpty
+            ? "stable-" + SHA256.hash(data: Data(metadata.ocId.utf8)).map { String(format: "%02x", $0) }.joined()
+            : metadata.etag
         // Provide default permissions if empty - folders need enumeration, files need reading
         self._permissions = metadata.permissions.isEmpty ? (metadata.isDirectory ? "RGDNVCK" : "RGDNVW") : metadata.permissions
         self._isDownloaded = metadata.isDownloaded

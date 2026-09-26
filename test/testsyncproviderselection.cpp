@@ -1,15 +1,24 @@
 /* This software is in the public domain, furnished "as is", without warranty. */
 
+#include "gui/accountmanager.h"
 #include "gui/accountstate.h"
 #include "gui/folderman.h"
 #include "libsync/account.h"
 #include "libsync/configfile.h"
+#include "libsync/creds/httpcredentials.h"
 
 #include <QFile>
 #include <QTemporaryDir>
 #include <QtTest>
 
 using namespace OCC;
+
+class HttpCredentialsTest : public HttpCredentials
+{
+public:
+    using HttpCredentials::HttpCredentials;
+    void restartOauth() override { }
+};
 
 class TestSyncProviderSelection : public QObject
 {
@@ -84,10 +93,39 @@ private Q_SLOTS:
         QCOMPARE(localFile.readAll(), QByteArray("local changes"));
     }
 
+    void testShutdownPreservesInactiveFolders()
+    {
+        auto manager = FolderMan::createInstance(true);
+        auto account = Account::create(QUuid::createUuid());
+        account->setCredentials(new HttpCredentialsTest(QStringLiteral("secret")));
+        QVERIFY(AccountManager::instance()->addAccount(account));
+        FolderDefinition definition(account->uuid(), QUrl(QStringLiteral("https://example.org/dav")), {}, {});
+        definition.setLocalPath(QStringLiteral("/saved/folder"));
+        {
+            auto settings = ConfigFile::makeQSettings();
+            settings.beginWriteArray("Folders", 1);
+            settings.setArrayIndex(0);
+            FolderDefinition::save(settings, definition);
+            settings.endArray();
+        }
+        QSignalSpy removed(AccountManager::instance(), &AccountManager::accountRemoved);
+        QSignalSpy deleted(AccountManager::instance(), &AccountManager::accountDeleted);
+        AccountManager::instance()->shutdown();
+        QCOMPARE(removed.count(), 1);
+        QCOMPARE(deleted.count(), 0);
+        auto settings = ConfigFile::makeQSettings();
+        QCOMPARE(settings.beginReadArray("Folders"), 1);
+        settings.setArrayIndex(0);
+        QCOMPARE(FolderDefinition::load(settings).accountUUID(), account->uuid());
+        settings.endArray();
+    }
+
     void testRemoveAccountWithInactiveFolders()
     {
         auto manager = FolderMan::createInstance(true);
-        AccountStatePtr account(AccountState::fromNewAccount(Account::create(QUuid::createUuid())).release());
+        auto newAccount = Account::create(QUuid::createUuid());
+        newAccount->setCredentials(new HttpCredentialsTest(QStringLiteral("secret")));
+        const auto account = AccountManager::instance()->addAccount(newAccount);
         const auto otherAccount = QUuid::createUuid();
         {
             auto settings = ConfigFile::makeQSettings();
@@ -100,7 +138,7 @@ private Q_SLOTS:
             }
             settings.endArray();
         }
-        QVERIFY(QMetaObject::invokeMethod(manager.get(), "slotRemoveFoldersForAccount", Qt::DirectConnection, Q_ARG(AccountStatePtr, account)));
+        AccountManager::instance()->deleteAccount(account);
         auto settings = ConfigFile::makeQSettings();
         QCOMPARE(settings.beginReadArray("Folders"), 1);
         settings.setArrayIndex(0);

@@ -51,12 +51,9 @@ FileProvider::FileProvider(QObject *parent)
         return;
     }
 
-    // Create the domain manager
-    _domainManager = std::make_unique<FileProviderDomainManager>(this);
-    
-    // Create the XPC client
     _xpc = std::make_unique<FileProviderXPC>(this);
-    
+    _domainManager = std::make_unique<FileProviderDomainManager>(this, _xpc.get());
+
     // Connect domain setup completion to XPC configuration
     connect(_domainManager.get(), &FileProviderDomainManager::domainSetupComplete,
             this, &FileProvider::configureXPC);

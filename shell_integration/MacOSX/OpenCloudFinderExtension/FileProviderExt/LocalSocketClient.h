@@ -20,11 +20,8 @@
 /// If any UI work needs to be done, the `LineProcessor` class dispatches this work on the
 /// main queue (so the UI thread) itself.
 ///
-/// Other than the `init(withSocketPath:, lineProcessor)` and the `start()` method, all work
-/// is done "on the dispatch queue". The `localSocketQueue` is a serial dispatch queue (so a
-/// maximum of 1, and only 1, task is run at any moment), which guarantees safe access to
-/// instance variables. Both `askOnSocket(_:, query:)` and `askForIcon(_:, isDirectory:)` will
-/// internally dispatch the work on the `DispatchQueue`.
+/// Public methods dispatch socket work onto a serial queue. Initialization happens on the
+/// caller's thread, and isConnected reads an atomic flag. The serial queue owns all other state.
 ///
 /// Sending and receiving data to and from the socket, is handled by two `DispatchSource`s.
 /// These will run an event handler when data can be read from resp. written to the socket.

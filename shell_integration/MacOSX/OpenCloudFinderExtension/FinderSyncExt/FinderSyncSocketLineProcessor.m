@@ -49,8 +49,8 @@
         if ([split count] < 2) {
             return;
         }
-        NSString *path = [split objectAtIndex:1];
-        
+        NSString *path = [[split subarrayWithRange:NSMakeRange(1, split.count - 1)] componentsJoinedByString:@":"];
+
         dispatch_async(dispatch_get_main_queue(), ^{
             [self.delegate reFetchFileNameCacheForPath:path];
         });
@@ -58,8 +58,8 @@
         if ([split count] < 2) {
             return;
         }
-        NSString *path = [split objectAtIndex:1];
-        
+        NSString *path = [[split subarrayWithRange:NSMakeRange(1, split.count - 1)] componentsJoinedByString:@":"];
+
         dispatch_async(dispatch_get_main_queue(), ^{
             NSLog(@"FinderSyncSocketLineProcessor: Registering path %@", path);
             [self.delegate registerPath:path];
@@ -68,8 +68,8 @@
         if ([split count] < 2) {
             return;
         }
-        NSString *path = [split objectAtIndex:1];
-        
+        NSString *path = [[split subarrayWithRange:NSMakeRange(1, split.count - 1)] componentsJoinedByString:@":"];
+
         dispatch_async(dispatch_get_main_queue(), ^{
             NSLog(@"FinderSyncSocketLineProcessor: Unregistering path %@", path);
             [self.delegate unregisterPath:path];
@@ -82,8 +82,8 @@
             return;
         }
         NSString *key = [split objectAtIndex:1];
-        NSString *value = [split objectAtIndex:2];
-        
+        NSString *value = [[split subarrayWithRange:NSMakeRange(2, split.count - 2)] componentsJoinedByString:@":"];
+
         dispatch_async(dispatch_get_main_queue(), ^{
             [self.delegate setString:key value:value];
         });
@@ -92,9 +92,7 @@
             return;
         }
         if([[split objectAtIndex:1] isEqualToString:@"BEGIN"]) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self.delegate resetMenuItems];
-            });
+            [self.delegate resetMenuItems];
         } else {
             // END message - signal that menu is complete
             [self.delegate menuHasCompleted];
@@ -104,17 +102,26 @@
             return;
         }
         NSDictionary *item = @{
-            @"command": [split objectAtIndex:1],
-            @"flags": [split objectAtIndex:2],
-            @"text": [split objectAtIndex:3]
+            @"command" : [split objectAtIndex:1],
+            @"flags" : [split objectAtIndex:2],
+            @"text" : [[split subarrayWithRange:NSMakeRange(3, split.count - 3)] componentsJoinedByString:@":"]
         };
-        
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self.delegate addMenuItem:item];
-        });
+
+        [self.delegate addMenuItem:item];
     } else {
         NSLog(@"FinderSyncSocketLineProcessor: Unknown command: %@", command);
     }
+}
+
+- (void)connectionDidOpen
+{
+    dispatch_async(dispatch_get_main_queue(), ^{ [self.delegate connectionDidOpen]; });
+}
+
+- (void)connectionDidClose
+{
+    // Wake any menu wait immediately; the delegate dispatches Finder UI cleanup.
+    [self.delegate connectionDidDie];
 }
 
 @end

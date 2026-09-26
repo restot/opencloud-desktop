@@ -33,6 +33,9 @@ final class WebDAVXMLParser: NSObject, XMLParserDelegate {
     private var currentText: String = ""
     private var isInPropstat: Bool = false
     private var currentStatus: String = ""
+    private var beforePropstat: ResponseBuilder?
+    private var sawMultistatus = false
+    private var invalidResponse = false
     
     /// Date formatters for parsing dates
     private static let rfc1123Formatter: DateFormatter = {
@@ -62,6 +65,9 @@ final class WebDAVXMLParser: NSObject, XMLParserDelegate {
     /// Parse XML data and return WebDAV items
     func parse(data: Data) -> [WebDAVItem]? {
         items = []
+        currentResponse = nil
+        sawMultistatus = false
+        invalidResponse = false
 
         let parser = XMLParser(data: data)
         parser.delegate = self
@@ -72,6 +78,7 @@ final class WebDAVXMLParser: NSObject, XMLParserDelegate {
             return nil
         }
 
+        guard sawMultistatus, !invalidResponse else { return nil }
         return items
     }
     
@@ -82,11 +89,14 @@ final class WebDAVXMLParser: NSObject, XMLParserDelegate {
         currentText = ""
         
         switch elementName {
+        case "multistatus":
+            sawMultistatus = namespaceURI == "DAV:"
         case "response":
             currentResponse = ResponseBuilder()
         case "propstat":
             isInPropstat = true
             currentStatus = ""
+            beforePropstat = currentResponse
         default:
             break
         }
@@ -101,20 +111,24 @@ final class WebDAVXMLParser: NSObject, XMLParserDelegate {
 
         guard var response = currentResponse else { return }
 
-        // NOTE: In WebDAV multistatus XML, <status> comes AFTER <prop> inside
-        // each <propstat>. Properties from the 200 propstat and 404 propstat are
-        // disjoint sets, so we unconditionally set all property values.
-        // Empty elements from the 404 propstat (e.g., <oc:id/>) produce empty
-        // trimmedText, which we skip for string properties via isEmpty checks.
-
         switch elementName {
         case "response":
-            if let item = response.build(baseURL: baseURL) {
+            if response.hasSuccessfulProperties, let item = response.build(baseURL: baseURL) {
                 items.append(item)
+            } else {
+                // An incomplete listing must never be interpreted as deletions.
+                invalidResponse = true
             }
             currentResponse = nil
+            return
 
         case "propstat":
+            if currentStatus.split(separator: " ").dropFirst().first == "200" {
+                response.hasSuccessfulProperties = true
+            } else if let previous = beforePropstat {
+                response = previous
+            }
+            beforePropstat = nil
             isInPropstat = false
 
         case "status":
@@ -148,7 +162,7 @@ final class WebDAVXMLParser: NSObject, XMLParserDelegate {
 
         case "getetag":
             if !trimmedText.isEmpty {
-                response.etag = trimmedText.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                response.etag = trimmedText
             }
 
         case "id": // oc:id
@@ -212,6 +226,7 @@ final class WebDAVXMLParser: NSObject, XMLParserDelegate {
 // MARK: - Response Builder
 
 private struct ResponseBuilder {
+    var hasSuccessfulProperties = false
     var href: String?
     var contentType: String?
     var size: Int64 = 0
@@ -241,7 +256,7 @@ private struct ResponseBuilder {
         if decodedHref.hasPrefix("/") {
             remotePath = decodedHref
         } else if let url = URL(string: href, relativeTo: baseURL) {
-            remotePath = url.path.removingPercentEncoding ?? url.path
+            remotePath = url.path
         } else {
             remotePath = decodedHref
         }
