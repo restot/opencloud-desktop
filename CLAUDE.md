@@ -65,8 +65,8 @@ Load relevant docs before working on specific areas:
 
 - **Build system details**: WARP.md
 - **Packaging for distributions**: PACKAGING.md
-- **macOS extensions progress**: PROGRESS.md
-- **Current implementation plan**: plan.md
+- **macOS Finder behavior and limits**: ai_docs/macos-finder-features.md
+- **Current validation**: ai_docs/testing.md
 - **Changelog**: CHANGELOG.md
 
 ## Session History (agent-watch)
