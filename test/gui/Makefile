@@ -1,29 +1,62 @@
 PYTHON_LINT_PATHS:="./**/*.py"
 
+UV_BIN := $(shell command -v uv 2>/dev/null)
+CURL_BIN := $(shell command -v curl 2>/dev/null)
+WGET_BIN := $(shell command -v wget 2>/dev/null)
+PATH := $(PATH)
+
+ifeq ($(UV_BIN),)
+	PATH := $(HOME)/.local/bin:$(PATH)
+	ifeq ($(CURL_BIN),)
+		ifeq ($(WGET_BIN),)
+			$(error "[ERR] Neither 'uv', 'curl', nor 'wget' command is available. Please install one of them.")
+		endif
+	endif
+endif
+export PATH
+
+ifeq ($(CURL_BIN),)
+	REQ_CMD := $(WGET_BIN) -qO-
+else
+	REQ_CMD := $(CURL_BIN) -LsSf
+endif
+
 .PHONY: install
-install: pnpm-install pnpm-install-chromium pip-install
+install: uv-install install-chromium
 
-.PHONY: pnpm-install
-pnpm-install:
-	cd webUI && pnpm install
+.PHONY: check-uv
+check-uv:
+	@if [ -z "$(UV_BIN)" ]; then \
+		echo "[INFO] 'uv' command not found. Installing uv..."; \
+		$(REQ_CMD) https://astral.sh/uv/install.sh | sh; \
+	fi
 
-.PHONY: pnpm-install-chromium
-pnpm-install-chromium:
-	cd webUI && pnpm exec playwright install chromium
+.PHONY: uv-install
+uv-install: check-uv
+	uv venv --system-site-packages --allow-existing
+	uv sync --frozen --all-groups
 
-.PHONY: pip-install
-pip-install:
-	python3.10 -m pip install -r requirements.txt
+.PHONY: install-chromium
+install-chromium: check-uv
+	uv run playwright install chromium
+
+.PHONY: run-atpsi-webdriver
+run-atpsi-webdriver: check-uv
+	bash woodpecker/run_atspi_webdriver.sh
 
 .PHONY: python-lint
-python-lint:
-	black --check --diff .
-	python3.10 -m pylint --rcfile ./.pylintrc $(PYTHON_LINT_PATHS)
+python-lint: check-uv
+	uv run --no-sync ruff format . --diff
+	uv run --no-sync ruff check .
 
 .PHONY: python-lint-fix
-python-lint-fix:
-	black .
-	python3.10 -m pylint --rcfile ./.pylintrc $(PYTHON_LINT_PATHS)
+python-lint-fix: check-uv
+	uv run --no-sync ruff format .
+	uv run --no-sync ruff check . --fix
+
+.PHONY: check-dead-code
+check-dead-code: check-uv
+	uv run --no-sync vulture .
 
 .PHONY: gherkin-lint
 gherkin-lint:

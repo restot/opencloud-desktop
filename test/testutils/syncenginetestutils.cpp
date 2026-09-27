@@ -268,6 +268,7 @@ FileInfo *FileInfo::create(const QString &relativePath, quint64 size, char conte
 {
     const PathComponents pathComponents { relativePath };
     FileInfo *parent = findInvalidatingEtags(pathComponents.parentDirComponents());
+    // if parent is null, you have to call mkdir first
     Q_ASSERT(parent);
     FileInfo &child = parent->children[pathComponents.fileName()] = FileInfo { pathComponents.fileName(), size };
     child.parentPath = parent->path();
@@ -685,9 +686,10 @@ qint64 FakeGetReply::readData(char *data, qint64 maxlen)
     return len;
 }
 
-FakePayloadReply::FakePayloadReply(QNetworkAccessManager::Operation op, const QNetworkRequest &request, const QByteArray &body, QObject *parent)
+FakePayloadReply::FakePayloadReply(QNetworkAccessManager::Operation op, const QNetworkRequest &request, const QByteArray &body, const QHttpHeaders &headers, QObject *parent)
     : FakeReply { parent }
     , _body(body)
+    , _headers(headers)
 {
     setRequest(request);
     setUrl(request.url());
@@ -701,6 +703,7 @@ void FakePayloadReply::respond()
 {
     if (error() == QNetworkReply::NoError) {
         setHeader(QNetworkRequest::ContentLengthHeader, _body.size());
+        setHeaders(_headers);
         Q_EMIT metaDataChanged();
         Q_EMIT readyRead();
         checkedFinished();
@@ -851,12 +854,13 @@ FakeFolder::FakeFolder(const FileInfo &fileTemplate, OCC::Vfs::Mode vfsMode, boo
     _accountState = OCC::TestUtils::createDummyAccount();
     account()->setCredentials(new FakeCredentials{_fakeAm});
 
-    _journalDb.reset(new OCC::SyncJournalDb(localPath() + QStringLiteral(".sync_test.db")));
+    _journalDb.reset(new OCC::SyncJournalDb(localPath() + QStringLiteral(".sync_journal.db")));
 
     _syncEngine.reset(new OCC::SyncEngine(account(), OCC::TestUtils::dummyDavUrl(), localPath(), QString(), _journalDb.get()));
     _syncEngine->setSyncOptions(OCC::SyncOptions { QSharedPointer<OCC::Vfs>(OCC::VfsPluginManager::instance().createVfsFromPlugin(vfsMode).release()) });
 
     // Ignore temporary files from the download. (This is in the default exclude list, but we don't load it)
+    _syncEngine->addManualExclude(QStringLiteral("].sync_journal.db*"));
     _syncEngine->addManualExclude(QStringLiteral("]*.~*"));
 
     auto vfs = _syncEngine->syncOptions()._vfs;
@@ -865,13 +869,14 @@ FakeFolder::FakeFolder(const FileInfo &fileTemplate, OCC::Vfs::Mode vfsMode, boo
         Q_ASSERT(vfs);
     }
 
+    QSignalSpy vfsStartedSpy(vfs.data(), &OCC::Vfs::started);
     // Ensure we have a valid Vfs instance "running"
     switchToVfs(vfs);
+    // delay setting of the root pin state until the vfs is ready
+    OC_ENFORCE(!vfsStartedSpy.isEmpty() || vfsStartedSpy.wait(5s));
+    const auto pinState = filesAreDehydrated ? OCC::PinState::OnlineOnly : OCC::PinState::AlwaysLocal;
+    OC_ENFORCE(vfs->setPinState(QString(), pinState));
 
-    if (vfsMode != OCC::Vfs::Mode::Off) {
-        const auto pinState = filesAreDehydrated ? OCC::PinState::OnlineOnly : OCC::PinState::AlwaysLocal;
-        OC_ENFORCE(vfs->setPinState(QString(), pinState));
-    }
 
     // A new folder will update the local file state database on first sync.
     // To have a state matching what users will encounter, we have to a sync
@@ -892,7 +897,6 @@ void FakeFolder::switchToVfs(QSharedPointer<OCC::Vfs> vfs)
     _syncEngine->setSyncOptions(opts);
 
     OCC::VfsSetupParams vfsParams(account(), OCC::TestUtils::dummyDavUrl(), QString(), u"DisplayName"_s, &syncEngine());
-    vfsParams.filesystemPath = localPath();
     vfsParams.journal = _journalDb.get();
     vfsParams.providerName = QStringLiteral("OC-TEST");
     vfsParams.providerDisplayName = QStringLiteral("OC-TEST");
@@ -1177,7 +1181,11 @@ void FakeReply::checkedFinished()
     // this is the case.
     if (!isFinished()) {
         setFinished(true);
-        Q_EMIT finished();
+        if (manager()) {
+            Q_EMIT finished();
+        } else {
+            qDebug() << u"FakeReply::finished() called without manager";
+        }
     }
 }
 

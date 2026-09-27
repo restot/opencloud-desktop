@@ -17,10 +17,7 @@
 
 #include "opencloudsynclib.h"
 
-#include <QNetworkProxy>
 #include <QSettings>
-#include <QString>
-#include <QVariant>
 
 #include <chrono>
 #include <memory>
@@ -100,16 +97,6 @@ public:
      */
     void configureHttpLogging(std::optional<bool> enable = std::nullopt);
 
-    // proxy settings
-    void setProxyType(
-        QNetworkProxy::ProxyType proxyType, const QString &host = QString(), int port = 0, bool needsAuth = false, const QString &user = QString());
-
-    int proxyType() const;
-    QString proxyHostName() const;
-    int proxyPort() const;
-    bool proxyNeedsAuth() const;
-    QString proxyUser() const;
-
     /** 0: no limit, 1: manual, >0: automatic */
     int useUploadLimit() const;
     int useDownloadLimit() const;
@@ -127,6 +114,9 @@ public:
     /** If we should move the files deleted on the server in the trash  */
     bool moveToTrash() const;
     void setMoveToTrash(bool);
+
+    bool traditionalFolderSync() const;
+    void setTraditionalFolderSync(bool enabled);
 
     /// Used for testing, so we do not change the user's config file.
     static bool setConfDir(const QString &value);

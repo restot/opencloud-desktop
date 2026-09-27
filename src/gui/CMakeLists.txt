@@ -37,7 +37,6 @@ target_sources(OpenCloudGui PRIVATE
 
     application.cpp
     fetchserversettings.cpp
-    clientproxy.cpp
     commonstrings.cpp
     connectionvalidator.cpp
     folder.cpp
@@ -143,8 +142,30 @@ IF( APPLE )
             notifications/macnotifications.mm
             settingsdialog_mac.mm
             guiutility_mac.mm
-            folderwatcher_mac.cpp)
+            folderwatcher_mac.cpp
+            # FileProvider integration
+            macOS/fileproviderdomainmanager.h
+            macOS/fileproviderdomainmanager_mac.mm
+            macOS/fileprovider.h
+            macOS/fileprovider_mac.mm
+            macOS/fileproviderxpc.h
+            macOS/fileproviderxpc_mac.mm
+    )
     set_source_files_properties(guiutility_mac.mm PROPERTIES COMPILE_DEFINITIONS SOCKETAPI_TEAM_IDENTIFIER_PREFIX="${SOCKETAPI_TEAM_IDENTIFIER_PREFIX}")
+    # Enable ARC for socketapisocket_mac.mm as it uses __weak references in XPC handlers
+    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/socketapi/socketapisocket_mac.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    # Enable ARC for FileProvider integration files
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/macOS/fileproviderdomainmanager_mac.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/macOS/fileprovider_mac.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/macOS/fileproviderxpc_mac.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    # Add include path for ClientCommunicationProtocol.h from extension
+    target_include_directories(OpenCloudGui PRIVATE
+        ${CMAKE_SOURCE_DIR}/shell_integration/MacOSX/OpenCloudFinderExtension/FileProviderExt/Services
+    )
+    find_library(FILEPROVIDER_FRAMEWORK FileProvider)
+    target_link_libraries(OpenCloudGui PRIVATE ${FILEPROVIDER_FRAMEWORK})
 elseif( WIN32 )
     target_sources(OpenCloudGui PRIVATE
             guiutility_win.cpp
@@ -212,10 +233,25 @@ else()
 endif()
 
 install(TARGETS opencloud OpenCloudGui ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+
+if(APPLE)
+    install(TARGETS OpenCloudGui
+        LIBRARY DESTINATION "${KDE_INSTALL_BUNDLEDIR}/${APPLICATION_SHORTNAME}.app/Contents/Frameworks"
+        NAMELINK_SKIP)
+endif()
 ecm_finalize_qml_module(OpenCloudGui DESTINATION ${KDE_INSTALL_QMLDIR})
 
 if(UNIX AND NOT APPLE)
     configure_file(${CMAKE_SOURCE_DIR}/opencloud.desktop.in
-                   ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_EXECUTABLE}.desktop)
-    install(FILES  ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_EXECUTABLE}.desktop DESTINATION ${KDE_INSTALL_DATADIR}/applications )
+                   ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_EXECUTABLE}.desktop
+                   @ONLY
+    )
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_EXECUTABLE}.desktop DESTINATION ${KDE_INSTALL_DATADIR}/applications)
+
+    configure_file(${CMAKE_SOURCE_DIR}/opencloud.metainfo.xml.in
+            ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_REV_DOMAIN}.${APPLICATION_EXECUTABLE}.metainfo.xml
+            @ONLY
+    )
+
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_REV_DOMAIN}.${APPLICATION_EXECUTABLE}.metainfo.xml DESTINATION ${KDE_INSTALL_METAINFODIR})
 endif()

@@ -13,21 +13,21 @@
  */
 #pragma once
 
-#include "../common/pinstate.h"
-#include "../common/result.h"
-#include "../common/syncfilestatus.h"
-#include "../common/utility.h"
-#include "assert.h"
+#include "filesystem.h"
 #include "libsync/accountfwd.h"
+#include "libsync/common/pinstate.h"
+#include "libsync/common/result.h"
+#include "libsync/common/syncfilestatus.h"
+#include "libsync/common/utility.h"
 #include "libsync/discoveryinfo.h"
 #include "libsync/opencloudsynclib.h"
+#include "libsync/path.h"
 
 #include <QObject>
 #include <QSharedPointer>
 #include <QUrl>
 #include <QVersionNumber>
 
-#include <QFuture>
 #include <filesystem>
 #include <memory>
 
@@ -38,16 +38,13 @@ class SyncJournalDb;
 class SyncFileItem;
 class SyncEngine;
 class HydrationJob;
+class PluginFactory;
 
 /** Collection of parameters for initializing a Vfs instance. */
 struct OPENCLOUD_SYNC_EXPORT VfsSetupParams
 {
     explicit VfsSetupParams(const AccountPtr &account, const QUrl &baseUrl, const QString &spaceId, const QString &folderDisplayName, SyncEngine *syncEngine);
-    /** The full path to the folder on the local filesystem
-     *
-     * Always ends with /.
-     */
-    QString filesystemPath;
+
     QString folderDisplayName() const;
 
     /// Account url, credentials etc for network calls
@@ -63,17 +60,22 @@ struct OPENCLOUD_SYNC_EXPORT VfsSetupParams
     QString providerDisplayName;
     QString providerName;
     QVersionNumber providerVersion;
+    QString socketPath;
 
     const QUrl &baseUrl() const { return _baseUrl; }
     const QString &spaceId() const { return _spaceId; }
 
     SyncEngine *syncEngine() const;
 
+    QString filesystemPath() const;
+    const FileSystem::Path &root() const;
+
 private:
     QUrl _baseUrl;
     SyncEngine *_syncEngine;
     QString _spaceId;
     QString _folderDisplayName;
+    FileSystem::Path _root;
 };
 
 /** Interface describing how to deal with virtual/placeholder files.
@@ -98,7 +100,7 @@ public:
      * Currently plugins and modes are one-to-one but that's not required.
      * The raw integer values are used in Qml
      */
-    enum class Mode : uint8_t { Off = 0, WindowsCfApi = 1, XAttr = 2 };
+    enum class Mode : uint8_t { Off = 0, WindowsCfApi = 1, OpenVFS = 2 };
     Q_ENUM(Mode)
     enum class ConvertToPlaceholderResult : uint8_t { Ok, Locked };
     Q_ENUM(ConvertToPlaceholderResult)
@@ -275,13 +277,15 @@ public:
 
 protected:
     VfsPluginManager() = default;
-    std::pair<QString, class PluginFactory *> createVfsPluginFactory(Vfs::Mode mode) const;
+    std::pair<QString, PluginFactory *> createVfsPluginFactory(Vfs::Mode mode) const;
 
 
 private:
+    PluginFactory *createPluginFactoryInternal(Vfs::Mode mode) const;
+
     static VfsPluginManager *_instance;
 
-    mutable QMap<Vfs::Mode, bool> _pluginCache;
+    mutable QMap<Vfs::Mode, PluginFactory *> _pluginCache;
 };
 
 template <>

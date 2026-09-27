@@ -155,11 +155,8 @@ bool ProcessDirectoryJob::handleExcluded(const QString &path, const QString &loc
 
     if (excluded == CSYNC_NOT_EXCLUDED && !isSymlink) {
         return false;
-    } else if (excluded == CSYNC_FILE_SILENTLY_EXCLUDED || excluded == CSYNC_FILE_EXCLUDE_AND_REMOVE) {
+    } else if (excluded == CSYNC_FILE_SILENTLY_EXCLUDED) {
         Q_EMIT _discoveryData->silentlyExcluded(path);
-        return true;
-    } else if (excluded == CSYNC_FILE_EXCLUDE_RESERVED) {
-        Q_EMIT _discoveryData->excluded(path);
         return true;
     }
 
@@ -174,9 +171,7 @@ bool ProcessDirectoryJob::handleExcluded(const QString &path, const QString &loc
         switch (excluded) {
         case CSYNC_NOT_EXCLUDED:
         case CSYNC_FILE_SILENTLY_EXCLUDED:
-        case CSYNC_FILE_EXCLUDE_AND_REMOVE:
-        case CSYNC_FILE_EXCLUDE_RESERVED:
-            qFatal("These were handled earlier");
+            Q_UNREACHABLE();
         case CSYNC_FILE_EXCLUDE_LIST:
             item->_errorString = tr("The file is listed on the ignore list.");
             item->_status = SyncFileItem::Excluded;

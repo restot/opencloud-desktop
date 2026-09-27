@@ -383,7 +383,7 @@ private Q_SLOTS:
                 if (SUCCEEDED(hres)) {
                     hres = ppf->Save(target.native().data(), true);
                     if (SUCCEEDED(hres)) {
-                        qDebug() << u"Created lnk" << target << u"->" << path;
+                        qDebug() << u"Created lnk" << target.native() << u"->" << path;
                     } else {
                         qCritical() << u"Failed to create lnk: Save" << OCC::Utility::formatWinError(hres);
                     }
@@ -548,6 +548,16 @@ private Q_SLOTS:
         QCOMPARE(u"/fooo_bar"_s, OCC::FileSystem::canonicalPath(path));
         QCOMPARE(OCC::FileSystem::toFilesystemPath(u"/fooo_bar"_s).native(), OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
 #endif
+    }
+
+    void testEnum()
+    {
+        // test whether enumValues returns all values
+        auto list = QList{OCC::TestUtils::TestFlag::None, OCC::TestUtils::TestFlag::Flag0, OCC::TestUtils::TestFlag::Flag1, OCC::TestUtils::TestFlag::Flag3};
+        for (auto x : OCC::Utility::enumValues<OCC::TestUtils::TestFlag>()) {
+            QCOMPARE(list.removeAll(x), 1);
+        }
+        QCOMPARE(list.size(), 0);
     }
 };
 

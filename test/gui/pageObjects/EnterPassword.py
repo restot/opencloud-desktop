@@ -1,0 +1,39 @@
+from types import SimpleNamespace
+from appium.webdriver.common.appiumby import AppiumBy as By
+
+from pageObjects.AccountConnectionWizard import AccountConnectionWizard
+from helpers.WebUIHelper import authorize_via_webui
+from helpers.AppHelper import app
+
+
+class EnterPassword:
+    LOGIN_USER_LABEL = SimpleNamespace(
+        by=By.XPATH,
+        selector="//filler[@name='Login required']//label[contains(@name, 'Connecting')]",
+    )
+
+    def get_username(self):
+        # Parse username from the login label:
+        label = (
+            app()
+            .find_element(
+                EnterPassword.LOGIN_USER_LABEL.by,
+                EnterPassword.LOGIN_USER_LABEL.selector,
+            )
+            .text
+        )
+        username = label.split(" ", maxsplit=2)[1]
+        return username.capitalize()
+
+    def oidc_relogin(self, username, password):
+        login_url = AccountConnectionWizard.get_login_url()
+        authorize_via_webui(username, password, login_url)
+
+    def relogin(self, username, password):
+        self.oidc_relogin(username, password)
+
+    def login_after_setup(self, username, password):
+        self.oidc_relogin(username, password)
+
+    def accept_certificate(self):
+        AccountConnectionWizard.accept_certificate()

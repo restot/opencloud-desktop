@@ -1,3 +1,7 @@
+# enable handling of exit codes in powershell
+$PSNativeCommandUseErrorActionPreference=$true
+
+# define which python to use
 if ($IsWindows) {
     $python = (Get-Command py).Source
     $python=(py -c "import sys; print(sys.executable)")
@@ -9,7 +13,7 @@ if ($IsWindows) {
 # workaround, prevent CraftMaster detecting the platform as android
 $env:ANDROID_NDK = $null
 
-$RepoRoot = "{0}/../../" -f ([System.IO.Path]::GetDirectoryName($myInvocation.MyCommand.Definition))
+$RepoRoot = (Get-Item $PSScriptRoot).Parent.Parent
 $command = @("${HOME}/craft/CraftMaster/CraftMaster/CraftMaster.py",
              "--config", "${RepoRoot}/.craft.ini",
              "--config-override", "${RepoRoot}/.github/workflows/craft_override.ini",

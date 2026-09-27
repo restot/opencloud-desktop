@@ -25,15 +25,14 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QLoggingCategory>
-#include <QMap>
 #include <QMetaEnum>
-#include <QString>
 #include <QUrl>
 #include <QUrlQuery>
 
 #include <functional>
 #include <memory>
 #include <optional>
+#include <ranges>
 
 class QSettings;
 class QQuickWidget;
@@ -270,6 +269,22 @@ OPENCLOUD_SYNC_EXPORT Q_DECLARE_LOGGING_CATEGORY(lcUtility)
         Q_UNREACHABLE();
     }
 
+    template <class E>
+    auto enumValues()
+    {
+        const auto meta = QMetaEnum::fromType<E>();
+        Q_ASSERT(meta.isValid());
+        return std::views::iota(0, meta.keyCount()) | std::views::transform([meta](int i) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+            const auto v = meta.value64(i);
+            Q_ASSERT(v.has_value());
+            return static_cast<E>(v.value_or(0));
+#else
+            return static_cast<E>(meta.value(i));
+#endif
+        });
+    }
+
     template <typename T>
     class asKeyValueRange
     {
@@ -301,8 +316,19 @@ OPENCLOUD_SYNC_EXPORT Q_DECLARE_LOGGING_CATEGORY(lcUtility)
     }
 
 
+#ifdef Q_OS_LINUX
     OPENCLOUD_SYNC_EXPORT QString appImageLocation();
     OPENCLOUD_SYNC_EXPORT bool runningInAppImage();
+#else
+    inline QString appImageLocation()
+    {
+        Q_UNREACHABLE();
+    };
+    constexpr bool runningInAppImage()
+    {
+        return false;
+    };
+#endif
 
     OPENCLOUD_SYNC_EXPORT QDateTime parseRFC1123Date(const QString &date);
     OPENCLOUD_SYNC_EXPORT QString formatRFC1123Date(const QDateTime &date);

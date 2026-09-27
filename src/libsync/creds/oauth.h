@@ -60,7 +60,7 @@ public:
     Q_ENUM(TokenEndpointAuthMethods)
 
     enum class PromptValuesSupported : char { none = 0, consent = 1 << 0, select_account = 1 << 1, login = 1 << 2 };
-    Q_ENUM(PromptValuesSupported)
+    Q_FLAG(PromptValuesSupported)
     Q_DECLARE_FLAGS(PromptValuesSupportedFlags, PromptValuesSupported)
 
     OAuth(const QUrl &serverUrl, QNetworkAccessManager *networkAccessManager, const QVariantMap &dynamicRegistrationData, QObject *parent);
@@ -85,6 +85,9 @@ Q_SIGNALS:
     /**
      * The state has changed.
      * when logged in, token has the value of the token.
+     *
+     * Terminal signal for startAuthentication. The refresh flow uses
+     * refreshFinished() / refreshError() instead.
      */
     void result(OAuth::Result result, const QString &token = QString(), const QString &refreshToken = QString());
 
@@ -97,6 +100,10 @@ Q_SIGNALS:
 
     void dynamicRegistrationDataReceived();
 
+    /**
+     * Terminal failure signal for refreshAuthentication. The initial
+     * authentication flow uses result(Error) instead.
+     */
     void refreshError(QNetworkReply::NetworkError error, const QString &errorString);
 
 
@@ -110,6 +117,7 @@ protected:
 
     QString _clientId;
     QString _clientSecret;
+    QString _scopes = QStringLiteral("openid offline_access email profile");
 
     QUrl _registrationEndpoint;
 

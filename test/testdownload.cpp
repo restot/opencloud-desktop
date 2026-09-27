@@ -16,6 +16,7 @@
 #include <unistd.h>
 #endif
 
+using namespace Qt::Literals::StringLiterals;
 using namespace std::chrono_literals;
 using namespace OCC;
 
@@ -73,11 +74,14 @@ private Q_SLOTS:
 
         QTest::newRow("Vfs::Mode::Off") << Vfs::Mode::Off << false;
 
+        if (VfsPluginManager::instance().isVfsPluginAvailable(Vfs::Mode::OpenVFS)) {
+            QTest::newRow("Vfs::Mode::Xattr dehydrdeated") << Vfs::Mode::OpenVFS << false;
+            QTest::newRow("Vfs::Mode::Xattr hydrated") << Vfs::Mode::OpenVFS << true;
+        }
+
         if (VfsPluginManager::instance().isVfsPluginAvailable(Vfs::Mode::WindowsCfApi)) {
             QTest::newRow("Vfs::Mode::WindowsCfApi dehydrated") << Vfs::Mode::WindowsCfApi << true;
-
-            // TODO: the hydrated version will fail due to an issue in the winvfs plugin, so leave it disabled for now.
-            // QTest::newRow("Vfs::Mode::WindowsCfApi hydrated") << Vfs::Mode::WindowsCfApi << false;
+            QTest::newRow("Vfs::Mode::WindowsCfApi hydrated") << Vfs::Mode::WindowsCfApi << false;
         } else if (Utility::isWindows()) {
             qWarning("Skipping Vfs::Mode::WindowsCfApi");
         }
@@ -301,6 +305,67 @@ private Q_SLOTS:
             QCOMPARE(getItem(completeSpy, QStringLiteral("A/resendme"))->_status, SyncFileItem::NormalError);
             QVERIFY(getItem(completeSpy, QStringLiteral("A/resendme"))->_errorString.contains(serverMessage));
         }
+    }
+
+    void testDehydrated404()
+    {
+        QFETCH_GLOBAL(Vfs::Mode, vfsMode);
+        QFETCH_GLOBAL(bool, filesAreDehydrated);
+        if (!filesAreDehydrated) {
+            QSKIP("404 test only applies to dehydrated files");
+        }
+
+        FakeFolder fakeFolder(FileInfo::A12_B12_C12_S12(), vfsMode, filesAreDehydrated);
+        QSignalSpy needSyncSpy(fakeFolder.vfs().get(), &Vfs::needSync);
+
+        fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            // fail once
+            if (op == QNetworkAccessManager::GetOperation && request.url().path().endsWith("A/a1"_L1) && needSyncSpy.isEmpty()) {
+                return new FakeErrorReply(op, request, this, 404, "Not Found");
+            }
+            return nullptr;
+        });
+
+        // this will fail as the file no longer exists on the remote, it was either renamed or deleted
+        // the 404 will trigger a needSync signal
+        fakeFolder.localModifier().appendByte(u"A/a1"_s);
+        QVERIFY(!fakeFolder.applyLocalModificationsAndSync());
+        QCOMPARE(needSyncSpy.count(), 1);
+
+        // now the local write will succeed
+        fakeFolder.localModifier().appendByte(u"A/a1"_s);
+        QVERIFY(fakeFolder.applyLocalModificationsAndSync());
+    }
+
+    void testFileName()
+    {
+        QFETCH_GLOBAL(Vfs::Mode, vfsMode);
+        QFETCH_GLOBAL(bool, filesAreDehydrated);
+
+        FakeFolder fakeFolder(FileInfo::A12_B12_C12_S12(), vfsMode, filesAreDehydrated);
+        fakeFolder.syncEngine().setIgnoreHiddenFiles(true);
+        const auto size = 1_MiB;
+        fakeFolder.remoteModifier().insert(u"A/a0"_s, size);
+
+        // https://github.com/nextcloud/desktop/pull/6456 claimed paths starting with # are not supported
+        fakeFolder.remoteModifier().insert(u"A/#a0"_s, size);
+        fakeFolder.remoteModifier().mkdir(u"#A"_s);
+        fakeFolder.remoteModifier().insert(u"#A/#a0"_s, size);
+
+        // Test various problematic unicode characters
+        fakeFolder.remoteModifier().insert(u"A/file_with_emoji_😀.txt"_s, size);
+        fakeFolder.remoteModifier().insert(u"A/café_file.txt"_s, size);
+        fakeFolder.remoteModifier().insert(u"A/файл.txt"_s, size); // Cyrillic
+        fakeFolder.remoteModifier().insert(u"A/文件.txt"_s, size); // Chinese
+        fakeFolder.remoteModifier().insert(u"A/ファイル.txt"_s, size); // Japanese
+        fakeFolder.remoteModifier().insert(u"A/مستند.txt"_s, size); // Arabic (RTL)
+        fakeFolder.remoteModifier().insert(u"A/file\u200Bwith\u200Bzero\u200Bwidth.txt"_s, size); // Zero-width spaces
+        fakeFolder.remoteModifier().insert(u"A/combined_ü_character.txt"_s, size); // Combining diacritics
+        fakeFolder.remoteModifier().insert(u"A/file\u202Ewith\u202CRTL.txt"_s, size); // RTL override marks
+        fakeFolder.remoteModifier().insert(u"A/🎉🎊celebration🎈.txt"_s, size); // Multiple emojis
+
+
+        QVERIFY(fakeFolder.applyLocalModificationsAndSync());
     }
 };
 

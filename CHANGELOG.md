@@ -1,5 +1,91 @@
 # Changelog
 
+## [4.0.0](https://github.com/opencloud-eu/desktop/releases/tag/v4.0.0) - 2026-09-03
+
+### ❤️ Thanks to all contributors! ❤️
+
+@Asmitapaudel, @NeoTheFox, @TheOneRing, @anon-pradip, @bernardgut, @db-ot, @dragotin, @flimmy, @guruz, @individual-it, @kaivol, @p-fruck, @paolostivanin, @prashant-gurung899, @saw-jan, @tbsbdr, @willyp713
+
+### 💥 Breaking changes
+
+- Update Qt to 6.11, this removes support for MacOS 12 [[#762](https://github.com/opencloud-eu/desktop/pull/762)]
+
+### ✨ Features
+
+- Use webfinger for OIDC parameter discovery [[#847](https://github.com/opencloud-eu/desktop/pull/847)]
+
+### 🐛 Bug Fixes
+
+- Abort a hydration request on failure [[#1067](https://github.com/opencloud-eu/desktop/pull/1067)]
+- Remove special handling of 404 during oauth refresh [[#1046](https://github.com/opencloud-eu/desktop/pull/1046)]
+- Extend ignore file with .Trash to follow https://specifications.freed… [[#1038](https://github.com/opencloud-eu/desktop/pull/1038)]
+- Fix issue with unicode paths in qml [[#1027](https://github.com/opencloud-eu/desktop/pull/1027)]
+- Fix fallback to wrong icon font [[#1018](https://github.com/opencloud-eu/desktop/pull/1018)]
+- Disable HTTP/2 support again [[#1010](https://github.com/opencloud-eu/desktop/pull/1010)]
+- fix(libsync): treat transient network errors as per-file retries, not whole-run aborts [[#970](https://github.com/opencloud-eu/desktop/pull/970)]
+- fix(libsync): resume a TUS upload from the server's offset on a 409 mismatch [[#971](https://github.com/opencloud-eu/desktop/pull/971)]
+- fix: decode JWT segments as Base64url (RFC 7515) [[#978](https://github.com/opencloud-eu/desktop/pull/978)]
+- Fix account stuck in "Connecting" state after network switch [[#969](https://github.com/opencloud-eu/desktop/pull/969)]
+- fix(creds): keep the job queue alive across transient token refreshes [[#955](https://github.com/opencloud-eu/desktop/pull/955)]
+- FetchServerSettingsJob always emit finished [[#824](https://github.com/opencloud-eu/desktop/pull/824)]
+- Fix path passed to pinstate [[#810](https://github.com/opencloud-eu/desktop/pull/810)]
+- Fix canonicalPath for drives (c:) [[#701](https://github.com/opencloud-eu/desktop/pull/701)]
+
+### 📈 Enhancement
+
+- Windows: Shorten name of explorer entry [[#1068](https://github.com/opencloud-eu/desktop/pull/1068)]
+- Refactor plugin loading [[#839](https://github.com/opencloud-eu/desktop/pull/839)]
+- Update SVG logo with new design [[#711](https://github.com/opencloud-eu/desktop/pull/711)]
+
+### 📦️ Dependencies
+
+- build(deps): bump actions/stale from 10 to 11 [[#1003](https://github.com/opencloud-eu/desktop/pull/1003)]
+- build(deps): bump actions/cache from 5 to 6 [[#958](https://github.com/opencloud-eu/desktop/pull/958)]
+- build(deps): bump actions/checkout from 6 to 7 [[#956](https://github.com/opencloud-eu/desktop/pull/956)]
+- Bump actions/upload-artifact from 6 to 7 [[#831](https://github.com/opencloud-eu/desktop/pull/831)]
+- Bump actions/cache from 4 to 5 [[#758](https://github.com/opencloud-eu/desktop/pull/758)]
+- Bump actions/upload-artifact from 5 to 6 [[#757](https://github.com/opencloud-eu/desktop/pull/757)]
+
+## [0.2](https://github.com/restot/opencloud-desktop/releases/tag/v0.2) - 2026-02-18
+
+### 🍎 macOS FileProvider VFS
+
+Initial implementation of macOS FileProvider integration, enabling native Finder integration with OpenCloud via the FileProvider framework.
+
+### 🐛 Bug Fixes
+
+- Fix non-blocking XPC connection: use `dispatch_group_notify` instead of `dispatch_group_wait` to avoid deadlocking the Qt main thread [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+- Don't disconnect/unauthenticate FileProvider domain on transient `Disconnected` state — network hiccups cause rapid state cycling that disables the extension [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+- Don't clear registered domains on `removeAllDomains` timeout to prevent duplicate domain registrations [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+- Fix `dispatch_group_wait` indefinite blocking in XPC connection setup [[c191763dd](https://github.com/restot/opencloud-desktop/commit/c191763dd)]
+- Fix NULL crash and O(n) recursive delete in ItemDatabase [[daa8cb6ee](https://github.com/restot/opencloud-desktop/commit/daa8cb6ee)]
+- Fix ARC bridging cast errors in FileProvider .mm files [[8e2142118](https://github.com/restot/opencloud-desktop/commit/8e2142118)]
+- Correct bandwidth typo and revert propagator to unique_ptr [[c29d24c1d](https://github.com/restot/opencloud-desktop/commit/c29d24c1d)]
+
+### 📈 Enhancement
+
+- FileProvider item capabilities: reading is always implicit for PROPFIND-returned items; folders always get content enumeration [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+- Add explicit `authType` (bearer/basic) to XPC credential protocol [[e3666c957](https://github.com/restot/opencloud-desktop/commit/e3666c957), [8c66ef5e5](https://github.com/restot/opencloud-desktop/commit/8c66ef5e5)]
+- Auto-authenticate FileProvider domains after XPC connections are established [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+- Enable ARC for all FileProvider .mm files [[49986a4bb](https://github.com/restot/opencloud-desktop/commit/49986a4bb)]
+- Set `DEVELOPMENT_TEAM` in Xcode project for all targets [[31887066a](https://github.com/restot/opencloud-desktop/commit/31887066a)]
+
+### 🔧 Tooling
+
+- Add `tools/cleanup-fileprovider.sh`: all-in-one cleanup, build, sign, and deploy script with `--clean` and `--build` modes
+
+## [3.0.3](https://github.com/opencloud-eu/desktop/releases/tag/v3.0.3) - 2025-12-08
+
+### ❤️ Thanks to all contributors! ❤️
+
+@TheOneRing, @anon-pradip, @individual-it
+
+## [3.0.2](https://github.com/opencloud-eu/desktop/releases/tag/v3.0.2) - 2025-11-27
+
+### ❤️ Thanks to all contributors! ❤️
+
+@individual-it
+
 ## [3.0.0](https://github.com/opencloud-eu/desktop/releases/tag/v3.0.0) - 2025-11-25
 
 ### ❤️ Thanks to all contributors! ❤️

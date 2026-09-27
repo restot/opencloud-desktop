@@ -1,6 +1,6 @@
 find_package(LibreGraphAPI 1.0.4 REQUIRED)
 set_package_properties(LibreGraphAPI PROPERTIES
-        URL https://github.com/owncloud/libre-graph-api-cpp-qt-client.git
+        URL https://github.com/opencloud-eu/libre-graph-api-cpp-qt-client
         DESCRIPTION "Libre Graph is a free API for cloud collaboration inspired by the MS Graph API"
         TYPE REQUIRED
 )
@@ -51,7 +51,6 @@ add_library(libsync SHARED
     creds/httpcredentials.cpp
     creds/oauth.cpp
     creds/jwt.cpp
-    creds/webfinger.cpp
     creds/idtoken.cpp
 
     networkjobs/getfilejob.cpp
@@ -64,7 +63,12 @@ add_library(libsync SHARED
     abstractcorejob.cpp
 
     appprovider.cpp
+
+    path.cpp
 )
+
+
+set_source_files_properties(accessmanager.cpp PROPERTIES COMPILE_DEFINITIONS WITH_HTTP2=$<BOOL:${WITH_HTTP2}>)
 
 if(WIN32)
     target_sources(libsync PRIVATE platform_win.cpp)
@@ -184,3 +188,9 @@ endif()
 add_subdirectory(common)
 
 install(TARGETS libsync EXPORT ${APPLICATION_SHORTNAME}Config ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+
+if(APPLE)
+    install(TARGETS libsync
+        LIBRARY DESTINATION "${KDE_INSTALL_BUNDLEDIR}/${APPLICATION_SHORTNAME}.app/Contents/Frameworks"
+        NAMELINK_SKIP)
+endif()

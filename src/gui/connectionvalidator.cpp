@@ -13,7 +13,6 @@
  */
 #include "gui/connectionvalidator.h"
 
-#include "gui/clientproxy.h"
 #include "gui/fetchserversettings.h"
 #include "gui/networkinformation.h"
 #include "libsync/account.h"
@@ -48,11 +47,17 @@ ConnectionValidator::ConnectionValidator(AccountPtr account, QObject *parent)
     : QObject(parent)
     , _account(account)
 {
-    // TODO: 6.0 abort validator on 5min timeout
+    // Hard timeout: abort the validator if it hasn't completed within 60 seconds.
+    // This prevents the account from getting stuck in "Connecting" state when
+    // a network change leaves HTTP requests hanging on a dead socket.
     auto timer = new QTimer(this);
-    timer->setInterval(30s);
-    connect(timer, &QTimer::timeout, this,
-        [this] { qCInfo(lcConnectionValidator) << u"ConnectionValidator" << _account->displayNameWithHost() << u"still running after" << _duration; });
+    timer->setSingleShot(true);
+    timer->setInterval(60s);
+    connect(timer, &QTimer::timeout, this, [this] {
+        qCWarning(lcConnectionValidator) << u"ConnectionValidator for" << _account->displayNameWithHost() << u"timed out after" << _duration;
+        _errors.append(tr("timeout"));
+        reportResult(Timeout);
+    });
     timer->start();
 }
 
@@ -66,38 +71,6 @@ void ConnectionValidator::checkServer(ConnectionValidator::ValidationMode mode)
     _mode = mode;
     qCDebug(lcConnectionValidator) << u"Checking server and authentication";
 
-    // Lookup system proxy in a thread https://github.com/owncloud/client/issues/2993
-    if (ClientProxy::isUsingSystemDefault()) {
-        qCDebug(lcConnectionValidator) << u"Trying to look up system proxy";
-        auto watcher = std::make_unique<QFutureWatcher<QList<QNetworkProxy>>>();
-        auto *watcherPtr = watcher.get();
-        // the watchers live time is managed by the connect
-        connect(
-            watcherPtr, &QFutureWatcher<QList<QNetworkProxy>>::finished, this, [watcher = std::move(watcher), elaped = Utility::ChronoElapsedTimer(), this] {
-                const auto proxies = watcher->result();
-                if (proxies.isEmpty()) {
-                    _account->accessManager()->setProxy(QNetworkProxy::NoProxy);
-                } else {
-                    _account->accessManager()->setProxy(proxies.first());
-                }
-                qCInfo(lcConnectionValidator) << u"System proxy lookup done" << _account->accessManager()->proxy() << u"for" << _account->displayNameWithHost()
-                                              << elaped;
-
-                slotCheckServerAndAuth();
-            });
-        watcherPtr->setFuture(QtConcurrent::run([url = _account->url()] { return QNetworkProxyFactory::systemProxyForQuery(QNetworkProxyQuery(url)); }));
-
-    } else {
-        // We want to reset the QNAM proxy so that the global proxy settings are used (via ClientProxy settings)
-        _account->accessManager()->setProxy(QNetworkProxy(QNetworkProxy::DefaultProxy));
-        // use a queued invocation so we're as asynchronous as with the other code path
-        QMetaObject::invokeMethod(this, &ConnectionValidator::slotCheckServerAndAuth, Qt::QueuedConnection);
-    }
-}
-
-// The actual check
-void ConnectionValidator::slotCheckServerAndAuth()
-{
     auto checkServerFactory = CheckServerJobFactory::createFromAccount(_account, _clearCookies, this);
     auto checkServerJob = checkServerFactory.startJob(_account->url(), this);
 

@@ -1,0 +1,162 @@
+from urllib.parse import urlparse
+from os import makedirs
+from os.path import exists, join
+from PySide6.QtCore import QSettings, QUuid, QUrl, QJsonValue
+
+from helpers.SpaceHelper import get_space_id, get_personal_space_id
+from helpers.ConfigHelper import get_config, set_config, is_windows
+from helpers.SyncHelper import listen_sync_status_for_item
+from helpers.api.utils import url_join
+from helpers.UserHelper import get_displayname_for_user
+from helpers.api import provisioning
+from helpers.AppHelper import create_app_session
+
+
+def substitute_inline_codes(value):
+    value = value.replace('%local_server%', get_config('localBackendUrl'))
+    value = value.replace('%client_root_sync_path%', get_config('clientRootSyncPath'))
+    value = value.replace('%current_user_sync_path%', get_config('currentUserSyncPath'))
+    value = value.replace('%local_server_hostname%', urlparse(get_config('localBackendUrl')).netloc)
+    return value.replace('%home%', get_config('home_dir'))
+
+
+def get_client_details(table):
+    client_details = {
+        'server': '',
+        'user': '',
+        'password': '',
+        'sync_folder': '',
+    }
+    for key, value in table.items():
+        actual_value = substitute_inline_codes(value)
+        if key == 'server':
+            client_details.update({'server': actual_value})
+        elif key == 'user':
+            client_details.update({'user': actual_value})
+        elif key == 'password':
+            client_details.update({'password': actual_value})
+        elif key == 'sync_folder':
+            client_details.update({'sync_folder': actual_value})
+    return client_details
+
+
+def create_user_sync_path(username):
+    # '' at the end adds '/' to the path
+    user_sync_path = join(get_config('clientRootSyncPath'), username, '')
+
+    if not exists(user_sync_path):
+        makedirs(user_sync_path)
+
+    set_current_user_sync_path(user_sync_path)
+    return user_sync_path
+
+
+def create_space_path(username, space='Personal'):
+    user_sync_path = create_user_sync_path(username)
+    space_path = join(user_sync_path, space, '')
+    if not exists(space_path):
+        makedirs(space_path)
+    return space_path
+
+
+def set_current_user_sync_path(sync_path):
+    set_config('currentUserSyncPath', sync_path)
+
+
+def get_resource_path(resource='', user='', space=''):
+    sync_path = get_config('currentUserSyncPath')
+    if user:
+        sync_path = user
+    space = space or get_config('syncConnectionName')
+    sync_path = join(sync_path, space)
+    sync_path = join(get_config('clientRootSyncPath'), sync_path)
+    resource = resource.replace(sync_path, '').strip('/').strip('\\')
+    return join(
+        sync_path,
+        resource,
+    )
+
+
+def get_temp_resource_path(resource_name):
+    return join(get_config('test_temp_dir'), resource_name)
+
+
+def get_current_user_sync_path():
+    return get_config('currentUserSyncPath')
+
+
+def start_client():
+    create_app_session()
+
+
+def generate_account_config(users, space='Personal'):
+    sync_paths = {}
+    users_uuids = {}
+    server_url = get_config('localBackendUrl')
+    capabilities = provisioning.get_capabilities()
+
+    settings = QSettings(get_config('clientConfigFile'), QSettings.Format.IniFormat)
+    capabilities_variant = QJsonValue(capabilities).toVariant()
+    try:
+        for idx, username in enumerate(users):
+            users_uuids[username] = QUuid.createUuid()
+            settings.beginGroup("Accounts")
+            settings.beginWriteArray(str(idx + 1), len(users))
+
+            settings.setValue("capabilities", capabilities_variant)
+            settings.setValue("default_sync_root", create_user_sync_path(username))
+            settings.setValue("uuid", users_uuids[username])
+            settings.setValue("display-name", get_displayname_for_user(username))
+            settings.setValue("url", server_url)
+            settings.setValue("userExplicitlySignedOut", 'false')
+
+            settings.endArray()
+            settings.setValue("size", len(users))
+            settings.endGroup()
+
+        settings.beginGroup("Folders")
+        for idx, username in enumerate(users):
+            sync_path = create_space_path(username, space)
+            settings.beginWriteArray(str(idx + 1), len(users))
+
+            if space == 'Personal':
+                space_id = get_personal_space_id(username)
+            else:
+                space_id = get_space_id(space, username)
+            dav_endpoint = QUrl(url_join(server_url, '/dav/spaces/', space_id))
+            settings.setValue("spaceId", space_id)
+            settings.setValue("accountUUID", users_uuids[username])
+            settings.setValue("davUrl", dav_endpoint)
+            settings.setValue("deployed", 'false')
+            settings.setValue("displayString", get_config('syncConnectionName'))
+            settings.setValue("ignoreHiddenFiles", 'true')
+            settings.setValue("localPath", sync_path)
+            settings.setValue("paused", 'false')
+            settings.setValue("priority", '50')
+            if is_windows():
+                settings.setValue("virtualFilesMode", 'cfapi')
+            else:
+                settings.setValue("virtualFilesMode", 'off')
+            settings.setValue("journalPath", ".sync_journal.db")
+            settings.endArray()
+            settings.setValue("size", len(users))
+            sync_paths.update({username: sync_path})
+
+        settings.endGroup()
+
+        settings.sync()
+    except Exception as e:
+        # Do not create config if there is an error.
+        # If not cleared, the 'sync()' will be called by the destructor of QSettings.
+        settings.clear()
+        raise e
+
+    return sync_paths
+
+
+def setup_client(username, space='Personal'):
+    set_config('syncConnectionName', space)
+    sync_paths = generate_account_config([username], space)
+    start_client()
+    for _, sync_path in sync_paths.items():
+        listen_sync_status_for_item(sync_path)

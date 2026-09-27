@@ -28,6 +28,9 @@ class QAuthenticator;
 
 namespace OCC {
 class OAuth;
+namespace Mac {
+    class FileProviderXPC;
+}
 
 /*
    The authentication system is this way because of Shibboleth.
@@ -48,6 +51,8 @@ class OPENCLOUD_SYNC_EXPORT HttpCredentials : public AbstractCredentials
 public:
     /// Don't add credentials if this is set on a QNetworkRequest
     static constexpr QNetworkRequest::Attribute DontAddCredentialsAttribute = QNetworkRequest::User;
+    // Only exposed for testing
+    static std::chrono::seconds TokenRefreshDefaultTimeoutOneError;
 
     explicit HttpCredentials(const QString &accessToken);
 
@@ -80,6 +85,11 @@ protected:
     QPointer<AccountBasedOAuth> _oAuthJob;
 
 private:
+    // The macOS host forwards the token only through the authenticated
+    // FileProvider XPC connection. Keep this out of the public credential API.
+    friend class Mac::FileProviderXPC;
+    QString accessToken() const { return _accessToken; }
+
     bool refreshAccessTokenInternal(int tokenRefreshRetriesCount);
 };
 
