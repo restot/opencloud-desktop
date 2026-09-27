@@ -64,16 +64,12 @@ public Q_SLOTS:
     /// Checks the server and the authentication.
     void checkServer(ConnectionValidator::ValidationMode mode = ConnectionValidator::ValidationMode::ValidateAuthAndUpdate);
 
-    void systemProxyLookupDone(const QNetworkProxy &proxy);
-
 Q_SIGNALS:
     void connectionResult(ConnectionValidator::Status status, const QStringList &errors);
 
     void sslErrors(const QList<QSslError> &errors);
 
 protected Q_SLOTS:
-    void slotCheckServerAndAuth();
-
     void slotStatusFound(const QUrl &url, const QJsonObject &info);
 
 private:

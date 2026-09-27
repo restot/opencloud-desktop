@@ -22,15 +22,18 @@ private Q_SLOTS:
         QTest::addColumn<Vfs::Mode>("vfsMode");
         QTest::addColumn<bool>("filesAreDehydrated");
 
-        QTest::newRow("Vfs::Off") << Vfs::Off << false;
+        QTest::newRow("Vfs::Mode::Off") << Vfs::Mode::Off << false;
 
-        if (VfsPluginManager::instance().isVfsPluginAvailable(Vfs::WindowsCfApi)) {
-            QTest::newRow("Vfs::WindowsCfApi dehydrated") << Vfs::WindowsCfApi << true;
+        if (VfsPluginManager::instance().isVfsPluginAvailable(Vfs::Mode::OpenVFS)) {
+            QTest::newRow("Vfs::Mode::Xattr dehydrdeated") << Vfs::Mode::OpenVFS << false;
+            QTest::newRow("Vfs::Mode::Xattr hydrated") << Vfs::Mode::OpenVFS << true;
+        }
 
-            // TODO: the hydrated version will fail due to an issue in the winvfs plugin, so leave it disabled for now.
-            // QTest::newRow("Vfs::WindowsCfApi hydrated") << Vfs::WindowsCfApi << false;
+        if (VfsPluginManager::instance().isVfsPluginAvailable(Vfs::Mode::WindowsCfApi)) {
+            QTest::newRow("Vfs::Mode::WindowsCfApi dehydrated") << Vfs::Mode::WindowsCfApi << true;
+            QTest::newRow("Vfs::Mode::WindowsCfApi hydrated") << Vfs::Mode::WindowsCfApi << false;
         } else if (Utility::isWindows()) {
-            qWarning("Skipping Vfs::WindowsCfApi");
+            qWarning("Skipping Vfs::Mode::WindowsCfApi");
         }
     }
 
@@ -43,8 +46,8 @@ private Q_SLOTS:
         QFETCH_GLOBAL(Vfs::Mode, vfsMode);
         QFETCH_GLOBAL(bool, filesAreDehydrated);
 
-        if (vfsMode == Vfs::WindowsCfApi) {
-            QSKIP("Known to be broken, see https://github.com/owncloud/client-desktop-vfs-win/issues/22");
+        if (filesAreDehydrated) {
+            QSKIP("Appending to a virtual file the client doesn't know about can never work");
         }
 
         FileInfo finalState;

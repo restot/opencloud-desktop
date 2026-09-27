@@ -1,0 +1,176 @@
+import os
+import re
+import shutil
+from pathlib import Path
+from pypdf import PdfReader
+from docx import Document
+from pptx import Presentation
+from openpyxl import load_workbook
+
+from helpers.ConfigHelper import is_windows, get_config
+
+
+def build_conflicted_regex(filename):
+    if "." in filename:
+        # TODO: improve this for complex filenames
+        namepart = filename.split(".")[0]
+        extpart = filename.split(".")[1]
+        return (
+            rf"{namepart} \(conflicted copy "
+            r"\d{4}-\d{2}-\d{2} "
+            r"\d{6}\)"
+            rf"\.{extpart}"
+        )
+    return rf"{filename} \(conflicted copy \d{{4}}-\d{{2}}-\d{{2}} \d{{6}}\)"
+
+
+def sanitize_path(path):
+    return path.replace("//", "/")
+
+
+def prefix_path_namespace(path):
+    if is_windows():
+        # https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file?redirectedfrom=MSDN#win32-file-namespaces
+        # disable string parsing
+        #  - long path
+        #  - trailing whitespaces
+        return f"\\\\?\\{path}"
+    return path
+
+
+def can_read(resource):
+    read = False
+    try:
+        with open(resource, encoding="utf-8"):
+            read = True
+    except Exception:
+        pass
+    return read and os.access(resource, os.R_OK)
+
+
+def can_write(resource):
+    write = False
+    try:
+        with open(resource, "w", encoding="utf-8"):
+            write = True
+    except Exception:
+        pass
+    return write and os.access(resource, os.W_OK)
+
+
+def read_file_content(file):
+    with open(file, encoding="utf-8") as f:
+        return f.read()
+
+
+def get_size_in_bytes(size):
+    match = re.match(r"(\d+)((?: )?[KkMmGgBb]{0,2})?", str(size))
+    units = ["b", "kb", "mb", "gb"]
+    multiplier = 1024
+    if match:
+        size_num = int(match.group(1))
+        size_unit = match.group(2)
+
+        if not (size_unit := size_unit.lower()):
+            return size_num
+        if size_unit in units:
+            if size_unit == "b":
+                return size_num
+            if size_unit == "kb":
+                return size_num * multiplier
+            if size_unit == "mb":
+                return size_num * (multiplier**2)
+            if size_unit == "gb":
+                return size_num * (multiplier**3)
+
+    raise ValueError("Invalid size: " + size)
+
+
+# temp paths created outside the temporary directory during the test
+CREATED_PATHS = []
+
+
+def remember_path(path):
+    CREATED_PATHS.append(path)
+
+
+def cleanup_created_paths():
+    global CREATED_PATHS
+    for path in CREATED_PATHS:
+        if os.path.exists(path):
+            if os.path.isdir(path):
+                shutil.rmtree(prefix_path_namespace(path))
+            else:
+                os.unlink(prefix_path_namespace(path))
+    CREATED_PATHS = []
+
+
+def get_file_for_upload(file_name):
+    base_upload_dir = get_config("files_for_upload")
+    return os.path.join(base_upload_dir, file_name)
+
+
+def convert_path_separators_for_os(path):
+    """
+    Convert path separators to match the current operating system.
+    On Windows, converts forward slashes to backslashes.
+    On other systems, returns the path unchanged.
+    """
+    if is_windows():
+        return path.replace("/", "\\")
+    return path
+
+
+def get_pdf_content(pdf_file):
+    reader = PdfReader(pdf_file)
+    content = ""
+    for page in reader.pages:
+        if page_text := page.extract_text():
+            content += page_text
+    return content
+
+
+def get_docs_content(docs_file):
+    doc = Document(docs_file)
+    return "\n".join(p.text for p in doc.paragraphs)
+
+
+def get_presentation_content(ppt_file):
+    presentation = Presentation(ppt_file)
+    text = []
+    for slide in presentation.slides:
+        for shape in slide.shapes:
+            if hasattr(shape, "text"):
+                text.append(shape.text)
+    return "\n".join(text)
+
+
+def get_excel_content(excel_file):
+    # parse with read_only mode
+    workbook = load_workbook(excel_file, read_only=True, data_only=True)
+    text = []
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows(values_only=True):
+            for cell in row:
+                if cell is not None:
+                    text.append(str(cell))
+    return "\n".join(text)
+
+
+def get_document_content(document):
+    content = ""
+    doc_ext = Path(document).suffix.lower().lstrip(".")
+    if doc_ext == "pdf":
+        content = get_pdf_content(document)
+    elif doc_ext == "docx":
+        content = get_docs_content(document)
+    elif doc_ext == "pptx":
+        content = get_presentation_content(document)
+    elif doc_ext == "xlsx":
+        content = get_excel_content(document)
+    elif doc_ext in ["txt", "md"]:
+        with open(document, encoding="utf-8") as f:
+            content = f.read()
+    else:
+        raise ValueError(f"Unsupported document format: {doc_ext}")
+    return content

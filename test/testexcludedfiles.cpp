@@ -95,6 +95,12 @@ private Q_SLOTS:
         QVERIFY(check_isExcluded(QStringLiteral("/a/b~"), keepHidden));
         QVERIFY(!check_isExcluded(QStringLiteral("/a/.b"), keepHidden));
         QVERIFY(check_isExcluded(QStringLiteral("/a/.Trashes"), keepHidden));
+
+        QVERIFY(check_isExcluded(QStringLiteral("/a/.Trash"), keepHidden));
+        QVERIFY(check_isExcluded(QStringLiteral("/a/.Trash-100"), keepHidden));
+        // what ever .Trash- is, it doesn't follow https://specifications.freedesktop.org/trash/1.0/
+        QVERIFY(!check_isExcluded(QStringLiteral("/a/.Trash-"), keepHidden));
+
         QVERIFY(check_isExcluded(QStringLiteral("/a/foo_conflict-bar"), keepHidden));
         QVERIFY(check_isExcluded(QStringLiteral("/a/foo (conflicted copy bar)"), keepHidden));
         QVERIFY(check_isExcluded(QStringLiteral("/a/.b"), excludeHidden));
@@ -148,26 +154,14 @@ private Q_SLOTS:
         /* and also in subdirs */
         QCOMPARE(check_file_full(QStringLiteral("projects/.apdisk/totally_amazing.jar")), CSYNC_FILE_EXCLUDE_LIST);
 
-        /* csync-journal is ignored in general silently. */
-        QCOMPARE(check_file_full(QStringLiteral(".csync_journal.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_full(QStringLiteral(".csync_journal.db.ctmp")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_full(QStringLiteral("subdir/.csync_journal.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-
-        /* also the new form of the database name */
-        QCOMPARE(check_file_full(QStringLiteral("._sync_5bdd60bdfcfa.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_full(QStringLiteral("._sync_5bdd60bdfcfa.db.ctmp")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_full(QStringLiteral("._sync_5bdd60bdfcfa.db-shm")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_full(QStringLiteral("subdir/._sync_5bdd60bdfcfa.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-
-        QCOMPARE(check_file_full(QStringLiteral(".sync_5bdd60bdfcfa.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_full(QStringLiteral(".sync_5bdd60bdfcfa.db.ctmp")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_full(QStringLiteral(".sync_5bdd60bdfcfa.db-shm")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_full(QStringLiteral("subdir/.sync_5bdd60bdfcfa.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-
+        /* sync-journal is ignored in general silently. */
+        QCOMPARE(check_file_full(QStringLiteral(".sync_journal.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
+        QCOMPARE(check_file_full(QStringLiteral(".sync_journal.db.ctmp")), CSYNC_FILE_SILENTLY_EXCLUDED);
+        QCOMPARE(check_file_full(QStringLiteral("subdir/.sync_journal.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
 
         /* pattern ]*.directory - ignore and remove */
-        QCOMPARE(check_file_full(QStringLiteral("my.~directory")), CSYNC_FILE_EXCLUDE_AND_REMOVE);
-        QCOMPARE(check_file_full(QStringLiteral("/a_folder/my.~directory")), CSYNC_FILE_EXCLUDE_AND_REMOVE);
+        QCOMPARE(check_file_full(QStringLiteral("my.~directory")), CSYNC_FILE_SILENTLY_EXCLUDED);
+        QCOMPARE(check_file_full(QStringLiteral("/a_folder/my.~directory")), CSYNC_FILE_SILENTLY_EXCLUDED);
 
         /* Not excluded because the pattern .netscape/cache requires directory. */
         QCOMPARE(check_file_full(QStringLiteral(".netscape/cache")), CSYNC_NOT_EXCLUDED);
@@ -252,29 +246,18 @@ private Q_SLOTS:
         QCOMPARE(check_file_traversal(QStringLiteral(".java")), CSYNC_NOT_EXCLUDED);
 
         /* csync-journal is ignored in general silently. */
-        QCOMPARE(check_file_traversal(QStringLiteral(".csync_journal.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_traversal(QStringLiteral(".csync_journal.db.ctmp")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_traversal(QStringLiteral("subdir/.csync_journal.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_traversal(QStringLiteral("/two/subdir/.csync_journal.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-
-        /* also the new form of the database name */
-        QCOMPARE(check_file_traversal(QStringLiteral("._sync_5bdd60bdfcfa.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_traversal(QStringLiteral("._sync_5bdd60bdfcfa.db.ctmp")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_traversal(QStringLiteral("._sync_5bdd60bdfcfa.db-shm")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_traversal(QStringLiteral("subdir/._sync_5bdd60bdfcfa.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-
-        QCOMPARE(check_file_traversal(QStringLiteral(".sync_5bdd60bdfcfa.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_traversal(QStringLiteral(".sync_5bdd60bdfcfa.db.ctmp")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_traversal(QStringLiteral(".sync_5bdd60bdfcfa.db-shm")), CSYNC_FILE_SILENTLY_EXCLUDED);
-        QCOMPARE(check_file_traversal(QStringLiteral("subdir/.sync_5bdd60bdfcfa.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
+        QCOMPARE(check_file_traversal(QStringLiteral(".sync_journal.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
+        QCOMPARE(check_file_traversal(QStringLiteral(".sync_journal.db.ctmp")), CSYNC_FILE_SILENTLY_EXCLUDED);
+        QCOMPARE(check_file_traversal(QStringLiteral("subdir/.sync_journal.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
+        QCOMPARE(check_file_traversal(QStringLiteral("/two/subdir/.sync_journal.db")), CSYNC_FILE_SILENTLY_EXCLUDED);
 
         /* Other builtin excludes */
         QCOMPARE(check_file_traversal(QStringLiteral("foo/Desktop.ini")), CSYNC_FILE_SILENTLY_EXCLUDED);
         QCOMPARE(check_file_traversal(QStringLiteral("Desktop.ini")), CSYNC_FILE_SILENTLY_EXCLUDED);
 
         /* pattern ]*.directory - ignore and remove */
-        QCOMPARE(check_file_traversal(QStringLiteral("my.~directory")), CSYNC_FILE_EXCLUDE_AND_REMOVE);
-        QCOMPARE(check_file_traversal(QStringLiteral("/a_folder/my.~directory")), CSYNC_FILE_EXCLUDE_AND_REMOVE);
+        QCOMPARE(check_file_traversal(QStringLiteral("my.~directory")), CSYNC_FILE_SILENTLY_EXCLUDED);
+        QCOMPARE(check_file_traversal(QStringLiteral("/a_folder/my.~directory")), CSYNC_FILE_SILENTLY_EXCLUDED);
 
         /* Not excluded because the pattern .netscape/cache requires directory. */
         QCOMPARE(check_file_traversal(QStringLiteral(".netscape/cache")), CSYNC_NOT_EXCLUDED);

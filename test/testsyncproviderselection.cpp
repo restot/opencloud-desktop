@@ -135,6 +135,8 @@ private Q_SLOTS:
                 FolderDefinition definition(i == 1 ? otherAccount : account->account()->uuid(), QUrl(QStringLiteral("https://example.org/dav")), {}, {});
                 definition.setLocalPath(QStringLiteral("/saved/folder%1").arg(i));
                 FolderDefinition::save(settings, definition);
+                settings.setValue(QStringLiteral("virtualFilesMode"), QStringLiteral("future-provider"));
+                settings.setValue(QStringLiteral("provider/customState"), QByteArray("preserve inactive state"));
             }
             settings.endArray();
         }
@@ -142,9 +144,10 @@ private Q_SLOTS:
         auto settings = ConfigFile::makeQSettings();
         QCOMPARE(settings.beginReadArray("Folders"), 1);
         settings.setArrayIndex(0);
-        const auto remaining = FolderDefinition::load(settings);
-        QCOMPARE(remaining.accountUUID(), otherAccount);
-        QCOMPARE(remaining.localPath(), QStringLiteral("/saved/folder1/"));
+        QCOMPARE(settings.value(QStringLiteral("accountUUID")).toUuid(), otherAccount);
+        QCOMPARE(settings.value(QStringLiteral("localPath")).toString(), QStringLiteral("/saved/folder1/"));
+        QCOMPARE(settings.value(QStringLiteral("virtualFilesMode")).toString(), QStringLiteral("future-provider"));
+        QCOMPARE(settings.value(QStringLiteral("provider/customState")).toByteArray(), QByteArray("preserve inactive state"));
         settings.endArray();
     }
 };

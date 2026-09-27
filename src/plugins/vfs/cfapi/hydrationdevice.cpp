@@ -31,8 +31,7 @@ CfApiHydrationJob *CfApiWrapper::HydrationDevice::requestHydration(const CfApiWr
         return it->context().path == context.path;
     }) == context.vfs->_hydrationJobs.cend());
 
-    auto *hydration =
-        new CfApiHydrationJob(context.vfs, context.fileId, std::make_unique<OCC::CfApiWrapper::HydrationDevice>(context, totalSize, parent), parent);
+    auto *hydration = new CfApiHydrationJob(context.vfs, context.fileId, std::make_unique<OCC::CfApiWrapper::HydrationDevice>(context, totalSize), parent);
     hydration->setContext(context);
     context.vfs->_hydrationJobs.insert(context.transferKey, hydration);
     connect(hydration, &HydrationJob::finished, context.vfs, [hydration] {
@@ -57,10 +56,29 @@ CfApiHydrationJob *CfApiWrapper::HydrationDevice::requestHydration(const CfApiWr
             qCWarning(lcCfApiHydrationDevice) << u"Hydration succeeded but the file appears to be moved" << hydration->context();
         }
     });
-    connect(hydration, &HydrationJob::error, context.vfs, [hydration](const QString &error) {
+    connect(hydration, &HydrationJob::error, context.vfs, [totalSize, hydration](const QString &error) {
         hydration->deleteLater();
         hydration->context().vfs->_hydrationJobs.remove(hydration->context().transferKey);
         qCWarning(lcCfApiHydrationDevice) << u"Hydration failed" << hydration->context() << error;
+
+        CF_OPERATION_INFO opInfo = {};
+        opInfo.StructSize = sizeof(opInfo);
+        opInfo.Type = CF_OPERATION_TYPE_TRANSFER_DATA;
+
+        opInfo.ConnectionKey = hydration->context().connectionKey;
+        opInfo.TransferKey.QuadPart = hydration->context().transferKey;
+
+        CF_OPERATION_PARAMETERS opParams = {};
+        opParams.ParamSize = CF_SIZE_OF_OP_PARAM(TransferData);
+        opParams.TransferData.CompletionStatus = STATUS_CLOUD_FILE_NOT_IN_SYNC;
+
+        // the error affects the whole file, not a transfer chunk
+        opParams.TransferData.Offset.QuadPart = 0;
+        opParams.TransferData.Length.QuadPart = totalSize;
+
+        if (HRESULT ok = CfExecute(&opInfo, &opParams); ok != S_OK) {
+            qCCritical(lcCfApiHydrationDevice) << u"Couldn't report error" << hydration->context() << u":" << ok << Utility::formatWinError(ok);
+        }
     });
     return hydration;
 }
@@ -136,4 +154,10 @@ qint64 CfApiWrapper::HydrationDevice::writeData(const char *data, qint64 len)
         }
     }
     return len;
+}
+
+void CfApiWrapper::HydrationDevice::close()
+{
+    Q_ASSERT(_buffer.isEmpty());
+    QIODevice::close();
 }

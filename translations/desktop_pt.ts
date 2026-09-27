@@ -7,22 +7,22 @@
         <translation>Barra de navegação</translation>
     </message>
     <message>
-        <location filename="../src/gui/qml/AccountBar.qml" line="112"/>
+        <location filename="../src/gui/qml/AccountBar.qml" line="115"/>
         <source>Add Account</source>
         <translation>Adicionar conta</translation>
     </message>
     <message>
-        <location filename="../src/gui/qml/AccountBar.qml" line="139"/>
+        <location filename="../src/gui/qml/AccountBar.qml" line="145"/>
         <source>Activity</source>
         <translation>Atividade</translation>
     </message>
     <message>
-        <location filename="../src/gui/qml/AccountBar.qml" line="153"/>
+        <location filename="../src/gui/qml/AccountBar.qml" line="162"/>
         <source>Settings</source>
         <translation>Definições</translation>
     </message>
     <message>
-        <location filename="../src/gui/qml/AccountBar.qml" line="182"/>
+        <location filename="../src/gui/qml/AccountBar.qml" line="191"/>
         <source>Quit</source>
         <translation>Sair</translation>
     </message>
@@ -176,31 +176,23 @@ Utilitário de sincronização de ficheiros para ambiente de trabalho.</translat
 <context>
     <name>Credentials</name>
     <message>
-        <location filename="../src/gui/qml/credentials/Credentials.qml" line="47"/>
+        <location filename="../src/gui/qml/credentials/Credentials.qml" line="48"/>
         <source>Stay logged out</source>
         <translation>Permanecer com sessão encerrada</translation>
     </message>
     <message>
-        <location filename="../src/gui/qml/credentials/Credentials.qml" line="85"/>
+        <location filename="../src/gui/qml/credentials/Credentials.qml" line="86"/>
         <source>Connecting %1 to:
 %2</source>
         <translation>A ligar %1 a:
 %2</translation>
     </message>
     <message>
-        <location filename="../src/gui/qml/credentials/Credentials.qml" line="85"/>
+        <location filename="../src/gui/qml/credentials/Credentials.qml" line="86"/>
         <source>Connecting to:
 %1</source>
         <translation>A ligar a:
 %1</translation>
-    </message>
-</context>
-<context>
-    <name>DiscoverWebFingerServiceJobFactory</name>
-    <message>
-        <location filename="../src/gui/newwizard/jobs/discoverwebfingerservicejobfactory.cpp" line="39"/>
-        <source>Invalid reply received from server</source>
-        <translation>Resposta inválida recebida do servidor</translation>
     </message>
 </context>
 <context>
@@ -214,15 +206,15 @@ Utilitário de sincronização de ficheiros para ambiente de trabalho.</translat
 <context>
     <name>FileSystem</name>
     <message>
-        <location filename="../src/libsync/filesystem.cpp" line="236"/>
+        <location filename="../src/libsync/filesystem.cpp" line="273"/>
         <source>Could not remove folder</source>
         <translation>Não foi possível remover a pasta</translation>
     </message>
     <message>
-        <location filename="../src/libsync/common/filesystembase.cpp" line="191"/>
-        <location filename="../src/libsync/common/filesystembase.cpp" line="193"/>
-        <location filename="../src/libsync/common/filesystembase.cpp" line="252"/>
+        <location filename="../src/libsync/common/filesystembase.cpp" line="196"/>
+        <location filename="../src/libsync/common/filesystembase.cpp" line="198"/>
         <location filename="../src/libsync/common/filesystembase.cpp" line="257"/>
+        <location filename="../src/libsync/common/filesystembase.cpp" line="262"/>
         <source>Can&apos;t rename »%1«, the file is currently in use</source>
         <translation>Não é possível renomear «%1», o ficheiro está em utilização</translation>
     </message>
@@ -483,7 +475,7 @@ Utilitário de sincronização de ficheiros para ambiente de trabalho.</translat
         <translation>Copiar URL</translation>
     </message>
     <message>
-        <location filename="../src/gui/qml/credentials/OAuthCredentials.qml" line="100"/>
+        <location filename="../src/gui/qml/credentials/OAuthCredentials.qml" line="102"/>
         <source>Restart authentication</source>
         <translation>Reiniciar autenticação</translation>
     </message>
@@ -491,12 +483,22 @@ Utilitário de sincronização de ficheiros para ambiente de trabalho.</translat
 <context>
     <name>OAuthCredentialsSetupWizardState</name>
     <message>
-        <location filename="../src/gui/newwizard/states/oauthcredentialssetupwizardstate.cpp" line="52"/>
+        <location filename="../src/gui/newwizard/states/oauthcredentialssetupwizardstate.cpp" line="64"/>
+        <source>Failed to look up instances: %1</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/gui/newwizard/states/oauthcredentialssetupwizardstate.cpp" line="68"/>
+        <source>Server returned empty list of instances</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/gui/newwizard/states/oauthcredentialssetupwizardstate.cpp" line="49"/>
         <source>Error while trying to log in to OAuth2-enabled server.</source>
         <translation>Erro ao tentar iniciar sessão num servidor com OAuth2.</translation>
     </message>
     <message>
-        <location filename="../src/gui/newwizard/states/oauthcredentialssetupwizardstate.cpp" line="56"/>
+        <location filename="../src/gui/newwizard/states/oauthcredentialssetupwizardstate.cpp" line="45"/>
         <source>Oauth2 authentication requires a secured connection.</source>
         <translation>A autenticação OAuth2 requer uma ligação segura.</translation>
     </message>
@@ -772,19 +774,37 @@ A atualização será realizada em segundo plano e substituirá o ficheiro AppIm
         <translation>Sair</translation>
     </message>
     <message>
-        <location filename="../src/gui/application.cpp" line="189"/>
+        <location filename="../src/gui/application.cpp" line="188"/>
         <source>Unsupported Server Version</source>
         <translation>Versão do servidor não suportada</translation>
     </message>
     <message>
-        <location filename="../src/gui/application.cpp" line="190"/>
+        <location filename="../src/gui/application.cpp" line="189"/>
         <source>The server on account »%1« runs an unsupported version %2. Using this client with unsupported server versions is untested and potentially dangerous. Proceed at your own risk.</source>
         <translation>O servidor da conta «%1» utiliza uma versão não suportada %2. Utilizar este cliente com versões de servidor não suportadas não foi testado e pode ser perigoso. Continue por sua conta e risco.</translation>
     </message>
     <message>
-        <location filename="../src/gui/application.cpp" line="215"/>
+        <location filename="../src/gui/application.cpp" line="214"/>
         <source>Application is shutting down</source>
         <translation>A aplicação está a encerrar</translation>
+    </message>
+</context>
+<context>
+    <name>OCC::CfApiVfsPluginFactory</name>
+    <message>
+        <location filename="../src/plugins/vfs/cfapi/vfs_cfapi.cpp" line="140"/>
+        <source>The Virtual filesystem feature does not support a drive as sync root</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/plugins/vfs/cfapi/vfs_cfapi.cpp" line="144"/>
+        <source>The Virtual filesystem feature requires a NTFS file system, %1 is using %2</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/plugins/vfs/cfapi/vfs_cfapi.cpp" line="148"/>
+        <source>The Virtual filesystem feature is not supported on network drives</source>
+        <translation type="unfinished"/>
     </message>
 </context>
 <context>
@@ -823,7 +843,8 @@ A atualização será realizada em segundo plano e substituirá o ficheiro AppIm
 <context>
     <name>OCC::ConnectionValidator</name>
     <message>
-        <location filename="../src/gui/connectionvalidator.cpp" line="122"/>
+        <location filename="../src/gui/connectionvalidator.cpp" line="58"/>
+        <location filename="../src/gui/connectionvalidator.cpp" line="96"/>
         <source>timeout</source>
         <translation>tempo esgotado</translation>
     </message>
@@ -874,141 +895,141 @@ A atualização será realizada em segundo plano e substituirá o ficheiro AppIm
 <context>
     <name>OCC::Folder</name>
     <message>
-        <location filename="../src/gui/folder.cpp" line="150"/>
+        <location filename="../src/gui/folder.cpp" line="146"/>
         <source>The path »%1« is too long. Please enable long paths in the Windows settings or choose a different folder.</source>
         <translation>O caminho «%1» é demasiado longo. Ative caminhos longos nas definições do Windows ou escolha outra pasta.</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="192"/>
+        <location filename="../src/gui/folder.cpp" line="191"/>
         <source>Failed to open the database for »%1«.</source>
         <translation>Falha ao abrir a base de dados para «%1».</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="173"/>
+        <location filename="../src/gui/folder.cpp" line="169"/>
         <source>Local folder »%1« does not exist.</source>
         <translation>A pasta local «%1» não existe.</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="198"/>
+        <location filename="../src/gui/folder.cpp" line="197"/>
         <source>»%1« should be a folder but is not.</source>
         <translation>«%1» deveria ser uma pasta, mas não é.</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="200"/>
+        <location filename="../src/gui/folder.cpp" line="199"/>
         <source>»%1« is not readable.</source>
         <translation>Não é possível ler «%1».</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="202"/>
+        <location filename="../src/gui/folder.cpp" line="201"/>
         <source>»%1« is not writable.</source>
         <translation>Não é possível escrever em «%1».</translation>
     </message>
     <message numerus="yes">
-        <location filename="../src/gui/folder.cpp" line="461"/>
+        <location filename="../src/gui/folder.cpp" line="460"/>
         <source>»%1« and %n other file(s) have been removed.</source>
         <translation><numerusform>«%1» e mais %n ficheiro(s) foram removidos.</numerusform><numerusform>«%1» e mais %n ficheiros foram removidos.</numerusform><numerusform>«%1» e mais %n ficheiro(s) foram removidos.</numerusform></translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="463"/>
+        <location filename="../src/gui/folder.cpp" line="462"/>
         <source>»%1« has been removed.</source>
         <comment>%1 names a file.</comment>
         <translation>«%1» foi removido.</translation>
     </message>
     <message numerus="yes">
-        <location filename="../src/gui/folder.cpp" line="468"/>
+        <location filename="../src/gui/folder.cpp" line="467"/>
         <source>»%1« and %n other file(s) have been added.</source>
         <translation><numerusform>«%1» e mais %n ficheiro(s) foram adicionados.</numerusform><numerusform>«%1» e mais %n ficheiros foram adicionados.</numerusform><numerusform>«%1» e mais %n ficheiro(s) foram adicionados.</numerusform></translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="470"/>
+        <location filename="../src/gui/folder.cpp" line="469"/>
         <source>»%1« has been added.</source>
         <comment>%1 names a file.</comment>
         <translation>«%1» foi adicionado.</translation>
     </message>
     <message numerus="yes">
-        <location filename="../src/gui/folder.cpp" line="475"/>
+        <location filename="../src/gui/folder.cpp" line="474"/>
         <source>»%1« and %n other file(s) have been updated.</source>
         <translation><numerusform>«%1» e mais %n ficheiro(s) foram carregados.</numerusform><numerusform>«%1» e mais %n ficheiros foram carregados.</numerusform><numerusform>«%1» e mais %n ficheiro(s) foram carregados.</numerusform></translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="477"/>
+        <location filename="../src/gui/folder.cpp" line="476"/>
         <source>»%1« has been updated.</source>
         <comment>%1 names a file.</comment>
         <translation>«%1» foi atualizado.</translation>
     </message>
     <message numerus="yes">
-        <location filename="../src/gui/folder.cpp" line="482"/>
+        <location filename="../src/gui/folder.cpp" line="481"/>
         <source>»%1« has been renamed to »%2« and %n other file(s) have been renamed.</source>
         <translation><numerusform>«%1» foi renomeado para «%2» e mais %n ficheiro(s) foi renomeado.</numerusform><numerusform>«%1» foi renomeado para «%2» e mais %n ficheiros foram renomeados.</numerusform><numerusform>»%1« foi renomeado para »%2« e mais %n ficheiro(s) foi renomeado.</numerusform></translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="484"/>
+        <location filename="../src/gui/folder.cpp" line="483"/>
         <source>»%1« has been renamed to »%2«.</source>
         <comment>%1 and %2 name files.</comment>
         <translation>«%1» foi renomeado para «%2».</translation>
     </message>
     <message numerus="yes">
-        <location filename="../src/gui/folder.cpp" line="489"/>
+        <location filename="../src/gui/folder.cpp" line="488"/>
         <source>»%1« has been moved to »%2« and %n other file(s) have been moved.</source>
         <translation><numerusform>»%1« foi renomeado para »%2« e mais %n ficheiro(s) foram movidos.</numerusform><numerusform>»%1« foi renomeado para »%2« e mais %n ficheiros foram movidos.</numerusform><numerusform>»%1« foi renomeado para »%2« e mais %n ficheiro(s) foram movidos.</numerusform></translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="491"/>
+        <location filename="../src/gui/folder.cpp" line="490"/>
         <source>»%1« has been moved to »%2«.</source>
         <translation>«%1» foi movido para «%2».</translation>
     </message>
     <message numerus="yes">
-        <location filename="../src/gui/folder.cpp" line="496"/>
+        <location filename="../src/gui/folder.cpp" line="495"/>
         <source>»%1« and %n other file(s) have sync conflicts.</source>
         <translation><numerusform>«%1» e mais %n ficheiro têm conflitos de sincronização.</numerusform><numerusform>«%1» e mais %n ficheiros têm conflitos de sincronização.</numerusform><numerusform>«%1» e mais %n ficheiro têm conflitos de sincronização.</numerusform></translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="498"/>
+        <location filename="../src/gui/folder.cpp" line="497"/>
         <source>»%1« has a sync conflict. Please check the conflict file!</source>
         <translation>«%1» tem um conflito de sincronização. Verifique o ficheiro de conflito!</translation>
     </message>
     <message numerus="yes">
-        <location filename="../src/gui/folder.cpp" line="503"/>
+        <location filename="../src/gui/folder.cpp" line="502"/>
         <source>»%1« and %n other file(s) could not be synced due to errors. See the log for details.</source>
         <translation><numerusform>«%1» e mais %n ficheiro não puderam ser sincronizados devido a erros. Consulte o registo para mais detalhes.</numerusform><numerusform>«%1» e mais %n ficheiros não puderam ser sincronizados devido a erros. Consulte o registo para mais detalhes.</numerusform><numerusform>«%1» e mais %n ficheiro não puderam ser sincronizados devido a erros. Consulte o registo para mais detalhes.</numerusform></translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="505"/>
+        <location filename="../src/gui/folder.cpp" line="504"/>
         <source>»%1« could not be synced due to an error. See the log for details.</source>
         <translation>«%1» não pôde ser sincronizado devido a um erro. Consulte o registo para mais detalhes.</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="511"/>
+        <location filename="../src/gui/folder.cpp" line="510"/>
         <source>Sync Activity</source>
         <translation>Atividade de sincronização</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="721"/>
+        <location filename="../src/gui/folder.cpp" line="713"/>
         <source>Switching VFS mode on folder »%1«</source>
         <translation>A alterar modo VFS na pasta «%1»</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="1061"/>
+        <location filename="../src/gui/folder.cpp" line="1053"/>
         <source>The folder »%1« was created but was excluded from synchronization previously. Data inside it will not be synchronized.</source>
         <translation>A pasta «%1» foi criada, mas estava previamente excluída da sincronização. Os dados dentro dela não serão sincronizados.</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="1064"/>
+        <location filename="../src/gui/folder.cpp" line="1056"/>
         <source>The file »%1« was created but was excluded from synchronization previously. It will not be synchronized.</source>
         <translation>O ficheiro «%1» foi criado, mas estava previamente excluído da sincronização. Não será sincronizado.</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="1068"/>
+        <location filename="../src/gui/folder.cpp" line="1060"/>
         <source>»%1« is not synchronized</source>
         <translation>«%1» não está sincronizado</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="857"/>
+        <location filename="../src/gui/folder.cpp" line="849"/>
         <source>Could not read system exclude file</source>
         <translation>Não foi possível ler o ficheiro de exclusões do sistema</translation>
     </message>
     <message>
-        <location filename="../src/gui/folder.cpp" line="1076"/>
+        <location filename="../src/gui/folder.cpp" line="1068"/>
         <source>Changes in synchronized folders could not be tracked reliably.
 
 This means that the synchronization client might not upload local changes immediately and will instead only scan for local changes and upload them occasionally (every two hours by default).
@@ -1024,72 +1045,72 @@ Isto significa que o cliente de sincronização pode não enviar imediatamente a
 <context>
     <name>OCC::FolderMan</name>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="241"/>
+        <location filename="../src/gui/folderman.cpp" line="239"/>
         <source>Could not reset folder state</source>
         <translation>Não foi possível repor o estado da pasta</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="242"/>
+        <location filename="../src/gui/folderman.cpp" line="240"/>
         <source>An old sync journal %1 was found, but could not be removed. Please make sure that no application is currently using it.</source>
         <translation>Foi encontrado um diário de sincronização antigo %1, mas não foi possível removê-lo. Certifique-se de que nenhuma aplicação o está a utilizar atualmente.</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="304"/>
+        <location filename="../src/gui/folderman.cpp" line="302"/>
         <source>Account disconnected or paused</source>
         <translation>Conta desligada ou pausada</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="448"/>
+        <location filename="../src/gui/folderman.cpp" line="446"/>
         <source>Folder is about to be removed</source>
         <translation>A pasta será removida</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="471"/>
+        <location filename="../src/gui/folderman.cpp" line="469"/>
         <source> (backup)</source>
         <translation> (cópia de segurança)</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="476"/>
+        <location filename="../src/gui/folderman.cpp" line="474"/>
         <source> (backup %1)</source>
         <translation> (cópia de segurança %1)</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="530"/>
+        <location filename="../src/gui/folderman.cpp" line="515"/>
         <source>Sync was successful, unresolved conflicts.</source>
         <translation>Sincronização concluída com sucesso, mas existem conflitos por resolver.</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="539"/>
+        <location filename="../src/gui/folderman.cpp" line="524"/>
         <source>%1 (Sync is paused)</source>
         <translation>%1 (Sincronização pausada)</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="571"/>
+        <location filename="../src/gui/folderman.cpp" line="535"/>
         <source>The folder »%1« is already in use by application %2!</source>
         <translation>A pasta «%1» já está a ser utilizada pela aplicação %2!</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="584"/>
+        <location filename="../src/gui/folderman.cpp" line="548"/>
         <source>The folder »%1« is already in use by another account.</source>
         <translation>A pasta «%1» já está a ser utilizada por outra conta.</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="659"/>
+        <location filename="../src/gui/folderman.cpp" line="624"/>
         <source>The local folder »%1« already contains a folder used in a folder sync connection. Please pick another local folder!</source>
         <translation>A pasta local «%1» já contém uma pasta utilizada numa ligação de sincronização. Escolha outra pasta local!</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="665"/>
+        <location filename="../src/gui/folderman.cpp" line="630"/>
         <source>The local folder »%1« is already contained in a folder used in a folder sync connection. Please pick another local folder!</source>
         <translation>A pasta local «%1» já está dentro de uma pasta utilizada numa ligação de sincronização. Escolha outra pasta local!</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="673"/>
+        <location filename="../src/gui/folderman.cpp" line="638"/>
         <source>Please pick another local folder for »%1«.</source>
         <translation>Escolha outra pasta local para «%1».</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="734"/>
+        <location filename="../src/gui/folderman.cpp" line="701"/>
         <source>Multiple accounts are sharing the folder »%1«.
 This configuration is know to lead to dataloss and is no longer supported.
 Please consider removing this folder from the account and adding it again.</source>
@@ -1098,32 +1119,32 @@ Esta configuração é conhecida por causar perda de dados e já não é suporta
 Considere remover esta pasta da conta e adicioná-la novamente.</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="599"/>
+        <location filename="../src/gui/folderman.cpp" line="563"/>
         <source>No valid folder selected!</source>
         <translation>Nenhuma pasta válida selecionada!</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="617"/>
+        <location filename="../src/gui/folderman.cpp" line="581"/>
         <source>The selected path does not exist!</source>
         <translation>O caminho selecionado não existe!</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="621"/>
+        <location filename="../src/gui/folderman.cpp" line="585"/>
         <source>The folder »%1« is used in a folder sync connection!</source>
         <translation>A pasta «%1» está a ser utilizada numa ligação de sincronização!</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="627"/>
+        <location filename="../src/gui/folderman.cpp" line="591"/>
         <source>The selected path is not a folder!</source>
         <translation>O caminho selecionado não é uma pasta!</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="631"/>
+        <location filename="../src/gui/folderman.cpp" line="595"/>
         <source>You have no permission to write to the selected folder!</source>
         <translation>Não tem permissão para escrever na pasta selecionada!</translation>
     </message>
     <message>
-        <location filename="../src/gui/folderman.cpp" line="655"/>
+        <location filename="../src/gui/folderman.cpp" line="621"/>
         <source>There is already a sync from the server to this local folder. Please pick another local folder!</source>
         <translation>Já existe uma sincronização do servidor para esta pasta local. Escolha outra pasta local!</translation>
     </message>
@@ -1164,7 +1185,7 @@ Considere remover esta pasta da conta e adicioná-la novamente.</translation>
 <context>
     <name>OCC::FolderWatcher</name>
     <message>
-        <location filename="../src/gui/folderwatcher.cpp" line="143"/>
+        <location filename="../src/gui/folderwatcher.cpp" line="144"/>
         <source>The watcher did not receive a test notification.</source>
         <translation>O observador não recebeu uma notificação de teste.</translation>
     </message>
@@ -1172,7 +1193,7 @@ Considere remover esta pasta da conta e adicioná-la novamente.</translation>
 <context>
     <name>OCC::FolderWatcherPrivate</name>
     <message>
-        <location filename="../src/gui/folderwatcher_linux.cpp" line="81"/>
+        <location filename="../src/gui/folderwatcher_linux.cpp" line="92"/>
         <source>This problem usually happens when the inotify watches are exhausted. Check the FAQ for details.</source>
         <translation>Este problema ocorre geralmente quando as observações inotify estão esgotadas. Consulte as FAQ para mais detalhes.</translation>
     </message>
@@ -1202,22 +1223,22 @@ Considere remover esta pasta da conta e adicioná-la novamente.</translation>
         <translation>Tempo de ligação esgotado</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="111"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="122"/>
         <source>No E-Tag received from server, check Proxy/Gateway</source>
         <translation>Não foi recebido E-Tag do servidor, verifique o proxy/gateway</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="117"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="128"/>
         <source>We received a different E-Tag for resuming. Retrying next time.</source>
         <translation>Foi recebido um E-Tag diferente para retomar. A tentar novamente na próxima vez.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="127"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="138"/>
         <source>We received an unexpected download Content-Length.</source>
         <translation>Foi recebido um Content-Length de descarregamento inesperado.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="155"/>
+        <location filename="../src/libsync/networkjobs/getfilejob.cpp" line="166"/>
         <source>Server returned wrong content-range</source>
         <translation>O servidor devolveu um content-range incorreto</translation>
     </message>
@@ -1339,17 +1360,22 @@ Considere remover esta pasta da conta e adicioná-la novamente.</translation>
 <context>
     <name>OCC::HydrationJob</name>
     <message>
-        <location filename="../src/libsync/vfs/hydrationjob.cpp" line="27"/>
+        <location filename="../src/libsync/vfs/hydrationjob.cpp" line="37"/>
         <source>Failed to find fileId: %1 in db</source>
         <translation>Falha ao localizar fileId: %1 na base de dados</translation>
     </message>
     <message>
-        <location filename="../src/libsync/vfs/hydrationjob.cpp" line="49"/>
+        <location filename="../src/libsync/vfs/hydrationjob.cpp" line="59"/>
         <source>Unexpected file size transferred. Expected %1 received %2</source>
         <translation>Tamanho de ficheiro transferido inesperado. Esperado %1, recebido %2</translation>
     </message>
     <message>
-        <location filename="../src/libsync/vfs/hydrationjob.cpp" line="55"/>
+        <location filename="../src/libsync/vfs/hydrationjob.cpp" line="64"/>
+        <source>File not found</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/libsync/vfs/hydrationjob.cpp" line="68"/>
         <source>Aborted.</source>
         <translation>Interrompido.</translation>
     </message>
@@ -1424,7 +1450,7 @@ Os itens cuja eliminação é permitida serão eliminados se impedirem a remoç�
 <context>
     <name>OCC::IssuesWidget</name>
     <message>
-        <location filename="../src/gui/issueswidget.cpp" line="358"/>
+        <location filename="../src/gui/issueswidget.cpp" line="351"/>
         <source>Filter</source>
         <translation>Filtro</translation>
     </message>
@@ -1439,22 +1465,17 @@ Os itens cuja eliminação é permitida serão eliminados se impedirem a remoç�
         <translation>Há problemas a mais. Nem todos serão visíveis aqui.</translation>
     </message>
     <message>
-        <location filename="../src/gui/issueswidget.cpp" line="208"/>
-        <source>The file »%1« was ignored as its name is reserved by %2</source>
-        <translation>O ficheiro «%1» foi ignorado porque o seu nome está reservado por %2</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/issueswidget.cpp" line="234"/>
+        <location filename="../src/gui/issueswidget.cpp" line="227"/>
         <source>Reset column sizes</source>
         <translation>Repor tamanho das colunas</translation>
     </message>
     <message>
-        <location filename="../src/gui/issueswidget.cpp" line="268"/>
+        <location filename="../src/gui/issueswidget.cpp" line="261"/>
         <source>Filter menu</source>
         <translation>Menu de filtros</translation>
     </message>
     <message>
-        <location filename="../src/gui/issueswidget.cpp" line="270"/>
+        <location filename="../src/gui/issueswidget.cpp" line="263"/>
         <source>Account</source>
         <translation>Conta</translation>
     </message>
@@ -1529,12 +1550,12 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
         <translation>Todos</translation>
     </message>
     <message>
-        <location filename="../src/gui/issueswidget.cpp" line="288"/>
+        <location filename="../src/gui/issueswidget.cpp" line="281"/>
         <source>Reset Filters</source>
         <translation>Repor filtros</translation>
     </message>
     <message>
-        <location filename="../src/gui/issueswidget.cpp" line="373"/>
+        <location filename="../src/gui/issueswidget.cpp" line="366"/>
         <source>Status Filter:</source>
         <translation>Filtro de estado:</translation>
     </message>
@@ -1552,137 +1573,54 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
         <translation>Pausar sincronização quando a ligação à Internet é tarifada</translation>
     </message>
     <message>
-        <location filename="../src/gui/networksettings.ui" line="30"/>
-        <source>Proxy Settings</source>
-        <translation>Definições de proxy</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.ui" line="36"/>
-        <source>No Proxy</source>
-        <translation>Sem proxy</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.ui" line="49"/>
-        <source>Use system proxy</source>
-        <translation>Usar proxy do sistema</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.ui" line="114"/>
-        <source>Host</source>
-        <translation>Servidor</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.ui" line="130"/>
-        <source>Proxy Hostname</source>
-        <translation>Nome do servidor proxy</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.ui" line="140"/>
-        <source>:</source>
-        <translation>:</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.ui" line="153"/>
-        <source>Proxy Port Number</source>
-        <translation>Número da porta do proxy</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.ui" line="174"/>
-        <source>Proxy server requires authentication</source>
-        <translation>O servidor proxy requer autenticação</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.ui" line="219"/>
-        <source>Note: proxy settings have no effects for accounts on localhost</source>
-        <translation>Nota: as definições de proxy não têm efeito em contas no localhost</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.ui" line="240"/>
+        <location filename="../src/gui/networksettings.ui" line="35"/>
         <source>Download Bandwidth</source>
         <translation>Largura de banda de descarregamento</translation>
     </message>
     <message>
-        <location filename="../src/gui/networksettings.ui" line="360"/>
+        <location filename="../src/gui/networksettings.ui" line="155"/>
         <source>Upload bandwidth in kilobytes per second</source>
         <translation>Largura de banda de envio em kilobytes por segundo</translation>
     </message>
     <message>
-        <location filename="../src/gui/networksettings.ui" line="291"/>
-        <location filename="../src/gui/networksettings.ui" line="376"/>
+        <location filename="../src/gui/networksettings.ui" line="86"/>
+        <location filename="../src/gui/networksettings.ui" line="171"/>
         <source>KBytes/s</source>
         <translation>KB/s</translation>
     </message>
     <message>
-        <location filename="../src/gui/networksettings.ui" line="246"/>
-        <location filename="../src/gui/networksettings.ui" line="328"/>
+        <location filename="../src/gui/networksettings.ui" line="41"/>
+        <location filename="../src/gui/networksettings.ui" line="123"/>
         <source>No limit</source>
         <translation>Sem limite</translation>
     </message>
     <message>
-        <location filename="../src/gui/networksettings.ui" line="59"/>
-        <source>Specify proxy manually</source>
-        <translation>Especificar proxy manualmente</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.ui" line="80"/>
-        <source>Proxy type</source>
-        <translation>Tipo de proxy</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.ui" line="256"/>
-        <location filename="../src/gui/networksettings.ui" line="338"/>
+        <location filename="../src/gui/networksettings.ui" line="51"/>
+        <location filename="../src/gui/networksettings.ui" line="133"/>
         <source>Limit to 3/4 of estimated bandwidth</source>
         <translation>Limite a 3/4 da largura de banda estimada</translation>
     </message>
     <message>
-        <location filename="../src/gui/networksettings.ui" line="268"/>
-        <location filename="../src/gui/networksettings.ui" line="350"/>
+        <location filename="../src/gui/networksettings.ui" line="63"/>
+        <location filename="../src/gui/networksettings.ui" line="145"/>
         <source>Manual limit</source>
         <translation>Limite manual</translation>
     </message>
     <message>
-        <location filename="../src/gui/networksettings.ui" line="278"/>
+        <location filename="../src/gui/networksettings.ui" line="73"/>
         <source>Download bandwidth in kilobytes per second</source>
         <translation>Largura de banda de descarregamento em kilobytes por segundo</translation>
     </message>
     <message>
-        <location filename="../src/gui/networksettings.ui" line="322"/>
+        <location filename="../src/gui/networksettings.ui" line="117"/>
         <source>Upload Bandwidth</source>
         <translation>Largura de banda de envio</translation>
     </message>
     <message>
-        <location filename="../src/gui/networksettings.ui" line="259"/>
-        <location filename="../src/gui/networksettings.ui" line="341"/>
+        <location filename="../src/gui/networksettings.ui" line="54"/>
+        <location filename="../src/gui/networksettings.ui" line="136"/>
         <source>Limit automatically</source>
         <translation>Limite automático</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.cpp" line="49"/>
-        <location filename="../src/gui/networksettings.cpp" line="50"/>
-        <source>Hostname of proxy server</source>
-        <translation>Nome do servidor proxy</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.cpp" line="51"/>
-        <location filename="../src/gui/networksettings.cpp" line="52"/>
-        <source>Username for proxy server</source>
-        <translation>Nome de utilizador para o servidor proxy</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.cpp" line="53"/>
-        <location filename="../src/gui/networksettings.cpp" line="54"/>
-        <source>Password for proxy server</source>
-        <translation>Palavra-passe para o servidor proxy</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.cpp" line="56"/>
-        <source>HTTP(S) proxy</source>
-        <translation>Proxy HTTP(S)</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/networksettings.cpp" line="57"/>
-        <source>SOCKS5 proxy</source>
-        <translation>Proxy SOCKS5</translation>
     </message>
 </context>
 <context>
@@ -1706,74 +1644,109 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
 <context>
     <name>OCC::OAuth</name>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="361"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="350"/>
         <source>Error returned from the server: &lt;em&gt;%1&lt;/em&gt;</source>
         <translation>Erro devolvido pelo servidor: &lt;em&gt;%1&lt;/em&gt;</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="363"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="352"/>
         <source>There was an error accessing the &apos;token&apos; endpoint: &lt;br&gt;&lt;em&gt;%1&lt;/em&gt;</source>
         <translation>Ocorreu um erro ao aceder ao endpoint &apos;token&apos;: &lt;br&gt;&lt;em&gt;%1&lt;/em&gt;</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="365"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="354"/>
         <source>Could not parse the JSON returned from the server: &lt;br&gt;&lt;em&gt;%1&lt;/em&gt;</source>
         <translation>Não foi possível analisar o JSON devolvido pelo servidor: &lt;br&gt;&lt;em&gt;%1&lt;/em&gt;</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="367"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="356"/>
         <source>Unsupported token type: %1</source>
         <translation>Tipo de token não suportado: %1</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="369"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="358"/>
         <source>The reply from the server did not contain all expected fields
 :%1</source>
         <translation>A resposta do servidor não continha todos os campos esperados
 :%1</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="371"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="360"/>
         <source>Unknown Error</source>
         <translation>Erro desconhecido</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="382"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="363"/>
+        <source>The id_token could not be parsed</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/libsync/creds/oauth.cpp" line="373"/>
         <source>&lt;h1&gt;Incorrect user&lt;/h1&gt;&lt;p&gt;You logged-in as user &lt;em&gt;%1&lt;/em&gt;, but must login with user &lt;em&gt;%2&lt;/em&gt;.&lt;br&gt;Please return to the %3 and restart the authentication.&lt;/p&gt;</source>
         <translation>&lt;h1&gt;Utilizador incorreto&lt;/h1&gt;&lt;p&gt;Iniciou sessão como utilizador &lt;em&gt;%1&lt;/em&gt;, mas tem de iniciar sessão como &lt;em&gt;%2&lt;/em&gt;.&lt;br&gt;Volte ao %3 e reinicie a autenticação.&lt;/p&gt;</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="387"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="378"/>
         <source>&lt;h1&gt;Incorrect user&lt;/h1&gt;&lt;p&gt;You logged-in as a different user than is associated with this account.&lt;br&gt;Please return to the %1 and restart the authentication.&lt;/p&gt;</source>
         <translation>&lt;h1&gt;Utilizador incorreto&lt;/h1&gt;&lt;p&gt;Iniciou sessão como um utilizador diferente do associado a esta conta.&lt;br&gt;Volte ao %1 e reinicie a autenticação.&lt;/p&gt;</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="392"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="383"/>
         <source>Incorrect user</source>
         <translation>Utilizador incorreto</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="406"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="397"/>
         <source>&lt;h1&gt;Login successful&lt;/h1&gt;&lt;p&gt;You can close this window.&lt;/p&gt;</source>
         <translation>&lt;h1&gt;Início de sessão bem-sucedido&lt;/h1&gt;&lt;p&gt;Pode fechar esta janela.&lt;/p&gt;</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="407"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="398"/>
         <source>Login successful</source>
         <translation>Início de sessão bem-sucedido</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="348"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="561"/>
+        <source>WebFinger response had unexpected content type: %1</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/libsync/creds/oauth.cpp" line="571"/>
+        <source>Could not parse WebFinger response: %1</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/libsync/creds/oauth.cpp" line="579"/>
+        <source>WebFinger response subject did not match the requested resource</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/libsync/creds/oauth.cpp" line="591"/>
+        <source>WebFinger response did not contain an OpenID Connect issuer</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/libsync/creds/oauth.cpp" line="598"/>
+        <source>WebFinger issuer link had no href</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/libsync/creds/oauth.cpp" line="683"/>
+        <source>Could not parse OIDC discovery response: %1</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/libsync/creds/oauth.cpp" line="337"/>
         <source>Login Error</source>
         <translation>Erro de início de sessão</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="374"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="365"/>
         <source>The audience of the id_token did not contain &quot;%1&quot;</source>
         <translation>O público do id_token não continha «%1»</translation>
     </message>
     <message>
-        <location filename="../src/libsync/creds/oauth.cpp" line="348"/>
+        <location filename="../src/libsync/creds/oauth.cpp" line="337"/>
         <source>&lt;h1&gt;Login Error&lt;/h1&gt;&lt;p&gt;%1&lt;/p&gt;</source>
         <translation>&lt;h1&gt;Erro de início de sessão&lt;/h1&gt;&lt;p&gt;%1&lt;/p&gt;</translation>
     </message>
@@ -1832,6 +1805,57 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
     </message>
 </context>
 <context>
+    <name>OCC::OpenVFS</name>
+    <message>
+        <location filename="../src/plugins/vfs/openvfs/vfs_openvfs.cpp" line="198"/>
+        <source>Unable to claim the sync root for files on demand, the folder is already claimed by %1</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/plugins/vfs/openvfs/vfs_openvfs.cpp" line="201"/>
+        <source>Unable to retrieve registration info. Error: %1</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/plugins/vfs/openvfs/vfs_openvfs.cpp" line="434"/>
+        <source>Cannot dehydrate a placeholder because the file changed</source>
+        <translation type="unfinished"/>
+    </message>
+</context>
+<context>
+    <name>OCC::OpenVfsPluginFactory</name>
+    <message>
+        <location filename="../src/plugins/vfs/openvfs/vfs_openvfs.cpp" line="286"/>
+        <source>Failed to read /proc/self/mountinfo</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/plugins/vfs/openvfs/vfs_openvfs.cpp" line="299"/>
+        <source>Failed to unmount the OpenVFS mount %1 Error:%2</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/plugins/vfs/openvfs/vfs_openvfs.cpp" line="308"/>
+        <source>The filesystem for %1 does not support xattributes.</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/plugins/vfs/openvfs/vfs_openvfs.cpp" line="311"/>
+        <source>The sync path is already claimed by %1</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/plugins/vfs/openvfs/vfs_openvfs.cpp" line="315"/>
+        <source>OpenVFS executable not found, please install it</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/plugins/vfs/openvfs/vfs_openvfs.cpp" line="321"/>
+        <source>Failed to find the OpenVFS config file, please check your installation.</source>
+        <translation type="unfinished"/>
+    </message>
+</context>
+<context>
     <name>OCC::OwncloudPropagator</name>
     <message>
         <location filename="../src/libsync/owncloudpropagator.cpp" line="733"/>
@@ -1842,107 +1866,107 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
 <context>
     <name>OCC::ProcessDirectoryJob</name>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="172"/>
+        <location filename="../src/libsync/discovery.cpp" line="169"/>
         <source>Symbolic links are not supported in syncing.</source>
         <translation>Ligações simbólicas não são suportadas na sincronização.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="186"/>
+        <location filename="../src/libsync/discovery.cpp" line="181"/>
         <source>File names ending with a period are not supported on this file system.</source>
         <translation>Nomes de ficheiros terminados em ponto não são suportados neste sistema de ficheiros.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="199"/>
+        <location filename="../src/libsync/discovery.cpp" line="194"/>
         <source>File names containing the character &apos;%1&apos; are not supported on this file system.</source>
         <translation>Nomes de ficheiros contendo o carácter «%1» não são suportados neste sistema de ficheiros.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="202"/>
+        <location filename="../src/libsync/discovery.cpp" line="197"/>
         <source>File name contains at least one invalid character</source>
         <translation>O nome do ficheiro contém pelo menos um carácter inválido</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="204"/>
+        <location filename="../src/libsync/discovery.cpp" line="199"/>
         <source>The file name is a reserved name on this file system.</source>
         <translation>O nome do ficheiro é reservado neste sistema de ficheiros.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="213"/>
+        <location filename="../src/libsync/discovery.cpp" line="208"/>
         <source>Filename contains trailing spaces.</source>
         <translation>O nome do ficheiro contém espaços no final.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="216"/>
+        <location filename="../src/libsync/discovery.cpp" line="211"/>
         <source>Filename is too long.</source>
         <translation>O nome do ficheiro é demasiado longo.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="219"/>
+        <location filename="../src/libsync/discovery.cpp" line="214"/>
         <source>File/Folder is ignored because it&apos;s hidden.</source>
         <translation>Ficheiro/Pasta ignorado por ser oculto.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="223"/>
+        <location filename="../src/libsync/discovery.cpp" line="218"/>
         <source>Conflict: Server version downloaded, local copy renamed and not uploaded.</source>
         <translation>Conflito: versão do servidor descarregada, cópia local renomeada e não enviada.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="227"/>
+        <location filename="../src/libsync/discovery.cpp" line="222"/>
         <source>The filename is blacklisted on the server.</source>
         <translation>O nome do ficheiro está na lista negra do servidor.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="1093"/>
+        <location filename="../src/libsync/discovery.cpp" line="1085"/>
         <source>Moved to invalid target, restoring</source>
         <translation>Movido para destino inválido, a restaurar</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="1106"/>
+        <location filename="../src/libsync/discovery.cpp" line="1098"/>
         <source>Not allowed to remove, restoring</source>
         <translation>Não permitido remover, a restaurar</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="1262"/>
+        <location filename="../src/libsync/discovery.cpp" line="1254"/>
         <source>Server replied with an error while reading directory »%1«: %2</source>
         <translation>O servidor respondeu com erro ao ler a pasta «%1»: %2</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="1052"/>
+        <location filename="../src/libsync/discovery.cpp" line="1044"/>
         <source>Not allowed because you don&apos;t have permission to add subfolders to that folder</source>
         <translation>Não permitido porque não tem permissão para adicionar subpastas a essa pasta</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="181"/>
+        <location filename="../src/libsync/discovery.cpp" line="176"/>
         <source>The file is listed on the ignore list.</source>
         <translation>O ficheiro está na lista de ignorados.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="530"/>
+        <location filename="../src/libsync/discovery.cpp" line="522"/>
         <source>Error while doing a rename, unhandled status code: %1</source>
         <translation>Erro ao renomear, código de estado não tratado: %1</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="1020"/>
+        <location filename="../src/libsync/discovery.cpp" line="1012"/>
         <source>Selective sync: Ignored because its path is deselected</source>
         <translation>Sincronização seletiva: ignorado porque o caminho está desmarcado</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="1057"/>
+        <location filename="../src/libsync/discovery.cpp" line="1049"/>
         <source>Not allowed because you don&apos;t have permission to add files in that folder</source>
         <translation>Não permitido porque não tem permissão para adicionar ficheiros nessa pasta</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="1070"/>
+        <location filename="../src/libsync/discovery.cpp" line="1062"/>
         <source>Not allowed to upload this file because it is read-only on the server, restoring</source>
         <translation>Não permitido enviar este ficheiro porque é só de leitura no servidor, a restaurar</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="1216"/>
+        <location filename="../src/libsync/discovery.cpp" line="1208"/>
         <source>Error while reading the database</source>
         <translation>Erro ao ler a base de dados</translation>
     </message>
     <message>
-        <location filename="../src/libsync/discovery.cpp" line="1241"/>
+        <location filename="../src/libsync/discovery.cpp" line="1233"/>
         <source>This Space is currently unavailable</source>
         <translation>Este Espaço está atualmente indisponível</translation>
     </message>
@@ -2231,13 +2255,13 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
         <translation>Falha no cálculo da soma de verificação</translation>
     </message>
     <message>
-        <location filename="../src/libsync/propagateuploadtus.cpp" line="218"/>
+        <location filename="../src/libsync/propagateuploadtus.cpp" line="222"/>
         <source>Upload did not receive a Content-Location.</source>
         <extracomment>Content-Location is a technical term, don't translate.</extracomment>
         <translation>O upload não recebeu o cabeçalho Content-Location.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/propagateuploadtus.cpp" line="226"/>
+        <location filename="../src/libsync/propagateuploadtus.cpp" line="230"/>
         <source>The local file was removed during sync.</source>
         <translation>O ficheiro local foi removido durante a sincronização.</translation>
     </message>
@@ -2417,38 +2441,38 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
 <context>
     <name>OCC::SocketApi</name>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="484"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="505"/>
         <source>Share with %1</source>
         <comment>parameter is OpenCloud</comment>
         <translation>Partilhar com %1</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="582"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="603"/>
         <source>Confirm deletion</source>
         <translation>Confirmar eliminação</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="584"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="605"/>
         <source>Do you want to delete the directory »%1« and all its contents permanently?</source>
         <translation>Deseja eliminar permanentemente a pasta «%1» e todo o seu conteúdo?</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="585"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="606"/>
         <source>Do you want to delete the file »%1« permanently?</source>
         <translation>Deseja eliminar permanentemente o ficheiro «%1»?</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="627"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="648"/>
         <source>Select new location...</source>
         <translation>Selecionar nova localização…</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="637"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="658"/>
         <source>Error</source>
         <translation>Erro</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="638"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="659"/>
         <source>Moving file failed:
 
 %1</source>
@@ -2457,80 +2481,80 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
 %1</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="737"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="762"/>
         <source>I shared something with you</source>
         <translation>Partilhei algo consigo</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="750"/>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="780"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="775"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="805"/>
         <source>Share...</source>
         <translation>Partilhar…</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="752"/>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="784"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="777"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="809"/>
         <source>Copy private link to clipboard</source>
         <translation>Copiar ligação privada para a área de transferência</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="753"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="778"/>
         <source>Send private link by email...</source>
         <translation>Enviar ligação privada por e-mail…</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="778"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="803"/>
         <source>Resharing this file is not allowed</source>
         <translation>Não é permitido repartilhar este ficheiro</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="778"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="803"/>
         <source>Resharing this folder is not allowed</source>
         <translation>Não é permitido repartilhar esta pasta</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="849"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="874"/>
         <source>Open in %1</source>
         <translation>Abrir em %1</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="860"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="885"/>
         <source>Show file versions in web browser</source>
         <translation>Mostrar versões do ficheiro no navegador web</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="882"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="907"/>
         <source>Rename...</source>
         <translation>Renomear…</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="885"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="910"/>
         <source>Rename and upload...</source>
         <translation>Renomear e enviar…</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="890"/>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="894"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="915"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="919"/>
         <source>Move and rename...</source>
         <translation>Mover e renomear…</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="897"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="922"/>
         <source>Move, rename and upload...</source>
         <translation>Mover, renomear e enviar…</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="900"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="925"/>
         <source>Delete local changes</source>
         <translation>Eliminar alterações locais</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="905"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="930"/>
         <source>Move and upload...</source>
         <translation>Mover e enviar…</translation>
     </message>
     <message>
-        <location filename="../src/gui/socketapi/socketapi.cpp" line="906"/>
+        <location filename="../src/gui/socketapi/socketapi.cpp" line="931"/>
         <source>Delete</source>
         <translation>Eliminar</translation>
     </message>
@@ -2554,12 +2578,12 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
         <translation>Não foi possível abrir ou criar a base de dados local de sincronização. Certifique-se de que tem acesso de escrita na pasta de sincronização.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="773"/>
+        <location filename="../src/libsync/syncengine.cpp" line="768"/>
         <source>Disk space is low: Downloads that would reduce free space below %1 were skipped.</source>
         <translation>Espaço em disco reduzido: descarregamentos que reduziriam o espaço livre abaixo de %1 foram ignorados.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="780"/>
+        <location filename="../src/libsync/syncengine.cpp" line="775"/>
         <source>Space quota exceeded. Please contact the Administrator of this space.</source>
         <translation>Quota do Espaço excedida. Contacte o administrador deste Espaço.</translation>
     </message>
@@ -2579,12 +2603,12 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
         <translation>Não foi possível ler o diário de sincronização.</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="473"/>
+        <location filename="../src/libsync/syncengine.cpp" line="471"/>
         <source>Cannot open the sync journal</source>
         <translation>Não é possível abrir o diário de sincronização</translation>
     </message>
     <message>
-        <location filename="../src/libsync/syncengine.cpp" line="756"/>
+        <location filename="../src/libsync/syncengine.cpp" line="751"/>
         <source>Aborted due to: %1</source>
         <translation>Interrompido devido a: %1</translation>
     </message>
@@ -2773,29 +2797,6 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
     </message>
 </context>
 <context>
-    <name>OCC::Vfs</name>
-    <message>
-        <location filename="../src/libsync/vfs/vfs.cpp" line="85"/>
-        <source>ReFS is currently not supported.</source>
-        <translation>O sistema de ficheiros ReFS não é atualmente suportado.</translation>
-    </message>
-    <message>
-        <location filename="../src/libsync/vfs/vfs.cpp" line="89"/>
-        <source>The Virtual filesystem feature does not support a drive as sync root</source>
-        <translation>A funcionalidade de sistema de ficheiros virtual não suporta uma unidade como raiz de sincronização</translation>
-    </message>
-    <message>
-        <location filename="../src/libsync/vfs/vfs.cpp" line="93"/>
-        <source>The Virtual filesystem feature requires a NTFS file system, %1 is using %2</source>
-        <translation>A funcionalidade de sistema de ficheiros virtual requer NTFS; %1 está a usar %2</translation>
-    </message>
-    <message>
-        <location filename="../src/libsync/vfs/vfs.cpp" line="97"/>
-        <source>The Virtual filesystem feature is not supported on network drives</source>
-        <translation>A funcionalidade de sistema de ficheiros virtual não é suportada em unidades de rede</translation>
-    </message>
-</context>
-<context>
     <name>OCC::WindowsUpdater</name>
     <message>
         <location filename="../src/gui/updater/ocupdater.cpp" line="422"/>
@@ -2977,11 +2978,6 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
         <extracomment>this displays an error string (%2) for a file %1</extracomment>
         <translation>%1: %2</translation>
     </message>
-    <message>
-        <location filename="../src/plugins/vfs/cfapi/cfapiwrapper.cpp" line="76"/>
-        <source>Paths beginning with &apos;#&apos; character are not supported in VFS mode.</source>
-        <translation>Caminhos que comecem pelo carácter «#» não são suportados no modo VFS.</translation>
-    </message>
 </context>
 <context>
     <name>RemoteInfo</name>
@@ -3041,7 +3037,7 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
 <context>
     <name>ServerUrlSetupWizardState</name>
     <message>
-        <location filename="../src/gui/newwizard/states/serverurlsetupwizardstate.cpp" line="53"/>
+        <location filename="../src/gui/newwizard/states/serverurlsetupwizardstate.cpp" line="52"/>
         <source>Invalid server URL</source>
         <translation>URL do servidor inválido</translation>
     </message>
@@ -3303,9 +3299,22 @@ Note que usar opções de registo na linha de comandos substituirá estas defini
     </message>
 </context>
 <context>
+    <name>VfsPluginManager</name>
+    <message>
+        <location filename="../src/libsync/vfs/vfs.cpp" line="247"/>
+        <source>ReFS is currently not supported.</source>
+        <translation type="unfinished"/>
+    </message>
+    <message>
+        <location filename="../src/libsync/vfs/vfs.cpp" line="255"/>
+        <source>The Virtual filesystem %1 is not supported on this platform</source>
+        <translation type="unfinished"/>
+    </message>
+</context>
+<context>
     <name>WebFingerUserInfoJobFactory</name>
     <message>
-        <location filename="../src/gui/newwizard/jobs/webfingeruserinfojobfactory.cpp" line="60"/>
+        <location filename="../src/gui/newwizard/jobs/webfingeruserinfojobfactory.cpp" line="61"/>
         <source>Failed to retrieve user info</source>
         <translation>Falha ao obter informações do utilizador</translation>
     </message>

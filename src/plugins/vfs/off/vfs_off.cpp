@@ -28,7 +28,7 @@ VfsOff::~VfsOff() = default;
 
 Vfs::Mode VfsOff::mode() const
 {
-    return Vfs::Off;
+    return Vfs::Mode::Off;
 }
 
 void VfsOff::stop() { }
@@ -78,6 +78,11 @@ LocalInfo VfsOff::statTypeVirtualFile(const std::filesystem::directory_entry &pa
 void VfsOff::startImpl(const VfsSetupParams &)
 {
     Q_EMIT started();
+}
+
+Result<void, QString> OffVfsPluginFactory::prepare(const QString &, const QUuid &) const
+{
+    return {};
 }
 
 Result<Vfs::ConvertToPlaceholderResult, QString> VfsOff::updateMetadata(const SyncFileItem &item, const QString &filePath, const QString &replacesFile)

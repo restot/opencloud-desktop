@@ -315,7 +315,7 @@ private Q_SLOTS:
 
         const auto fn = tempFile.fileName();
         const QString testKey = QStringLiteral("testKey");
-        const QByteArray testValue("testValue");
+        const auto testValue(u"testValue"_s);
 
         QVERIFY(!Tags::get(fn, testKey).has_value());
         QVERIFY(Tags::set(fn, testKey, testValue));
@@ -333,7 +333,7 @@ private Q_SLOTS:
 
         const auto fn = tempDir.path();
         const QString testKey = QStringLiteral("testKey");
-        const QByteArray testValue("testValue");
+        const QString testValue(u"testValue"_s);
 
         QVERIFY(!Tags::get(fn, testKey).has_value());
         QVERIFY(Tags::set(fn, testKey, testValue));
@@ -383,7 +383,7 @@ private Q_SLOTS:
                 if (SUCCEEDED(hres)) {
                     hres = ppf->Save(target.native().data(), true);
                     if (SUCCEEDED(hres)) {
-                        qDebug() << u"Created lnk" << target << u"->" << path;
+                        qDebug() << u"Created lnk" << target.native() << u"->" << path;
                     } else {
                         qCritical() << u"Failed to create lnk: Save" << OCC::Utility::formatWinError(hres);
                     }
@@ -469,6 +469,95 @@ private Q_SLOTS:
         auto inode = OCC::FileSystem::getInode(entry.path());
         QVERIFY(inode.has_value());
         QCOMPARE(fileInfo.inode(), inode.value());
+    }
+
+    void testCanonicalPath()
+    {
+        // we compare .native() for std::fiileystem::path, else Qt does actual file comparison
+        std::error_code ec;
+        // our build dir might be symlinked, ensure the input path is already canonical
+        auto path = OCC::FileSystem::fromFilesystemPath(std::filesystem::canonical(qApp->applicationFilePath().toStdString(), ec));
+        QVERIFY(ec.value() == 0);
+        QCOMPARE(OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native(), OCC::FileSystem::toFilesystemPath(path).native());
+        QCOMPARE(path, OCC::FileSystem::canonicalPath(path));
+
+#ifdef Q_OS_WIN
+        path = u"C:/"_s;
+        QCOMPARE(path, OCC::FileSystem::canonicalPath(path));
+        QCOMPARE(OCC::FileSystem::toFilesystemPath(path).native(), OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
+
+        path = u"C:"_s;
+        QCOMPARE("C:/"_L1, OCC::FileSystem::canonicalPath(path));
+        QCOMPARE(OCC::FileSystem::toFilesystemPath(path).native(), OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
+
+
+        // test non-existing file, which relies on lexical normalization rather than actual canonical path
+        path = u"C:/fooo_bar"_s;
+        QVERIFY(!QFileInfo::exists(path));
+        QCOMPARE(path, OCC::FileSystem::canonicalPath(path));
+        QCOMPARE(OCC::FileSystem::toFilesystemPath(path).native(), OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
+
+        path = u"C:/fooo_bar/../foo/./../fooo_bar"_s;
+        QVERIFY(!QFileInfo::exists(path));
+        QCOMPARE(u"C:/fooo_bar"_s, OCC::FileSystem::canonicalPath(path));
+        QCOMPARE(
+            OCC::FileSystem::toFilesystemPath(u"C:/fooo_bar"_s).native(), OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
+
+        // test multiple consecutive slashes
+        path = u"C:///fooo_bar//test///file"_s;
+        QVERIFY(!QFileInfo::exists(path));
+        QCOMPARE(u"C:/fooo_bar/test/file"_s, OCC::FileSystem::canonicalPath(path));
+        QCOMPARE(OCC::FileSystem::toFilesystemPath(u"C:/fooo_bar/test/file"_s).native(),
+            OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
+
+        // test trailing slashes
+        path = u"C:/fooo_bar///"_s;
+        QVERIFY(!QFileInfo::exists(path));
+        QCOMPARE(u"C:/fooo_bar"_s, OCC::FileSystem::canonicalPath(path));
+        QCOMPARE(
+            OCC::FileSystem::toFilesystemPath(u"C:/fooo_bar"_s).native(), OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
+
+        // test dot segments in middle of path
+        path = u"C:/fooo_bar/./test/./file"_s;
+        QVERIFY(!QFileInfo::exists(path));
+        QCOMPARE(u"C:/fooo_bar/test/file"_s, OCC::FileSystem::canonicalPath(path));
+        QCOMPARE(OCC::FileSystem::toFilesystemPath(u"C:/fooo_bar/test/file"_s).native(),
+            OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
+
+        // test mixed slashes on Windows
+        path = u"C:\\fooo_bar/test\\file"_s;
+        QVERIFY(!QFileInfo::exists(path));
+        QCOMPARE(u"C:/fooo_bar/test/file"_s, OCC::FileSystem::canonicalPath(path));
+        QCOMPARE(OCC::FileSystem::toFilesystemPath(u"C:/fooo_bar/test/file"_s).native(),
+            OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
+
+        // test UNC path
+        path = u"\\\\server\\share\\path"_s;
+        QCOMPARE(u"//server/share/path"_s, OCC::FileSystem::canonicalPath(path));
+        QCOMPARE(OCC::FileSystem::toFilesystemPath(u"//server/share/path"_s).native(),
+            OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
+#else
+        // test non-existing file, which relies on lexical normalization rather than actual canonical path
+        path = u"/fooo_bar"_s;
+        QVERIFY(!QFileInfo::exists(path));
+        QCOMPARE(path, OCC::FileSystem::canonicalPath(path));
+        QCOMPARE(OCC::FileSystem::toFilesystemPath(path).native(), OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
+
+        path = u"/fooo_bar/../foo/./../fooo_bar"_s;
+        QVERIFY(!QFileInfo::exists(path));
+        QCOMPARE(u"/fooo_bar"_s, OCC::FileSystem::canonicalPath(path));
+        QCOMPARE(OCC::FileSystem::toFilesystemPath(u"/fooo_bar"_s).native(), OCC::FileSystem::canonicalPath(OCC::FileSystem::toFilesystemPath(path)).native());
+#endif
+    }
+
+    void testEnum()
+    {
+        // test whether enumValues returns all values
+        auto list = QList{OCC::TestUtils::TestFlag::None, OCC::TestUtils::TestFlag::Flag0, OCC::TestUtils::TestFlag::Flag1, OCC::TestUtils::TestFlag::Flag3};
+        for (auto x : OCC::Utility::enumValues<OCC::TestUtils::TestFlag>()) {
+            QCOMPARE(list.removeAll(x), 1);
+        }
+        QCOMPARE(list.size(), 0);
     }
 };
 

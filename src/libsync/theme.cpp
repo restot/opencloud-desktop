@@ -228,8 +228,8 @@ QString Theme::aboutVersions(Theme::VersionFormat format) const
             gitUrl = gitSHA1(format) + br;
         }
     }
-    QStringList sysInfo = {QStringLiteral("OS: %1-%2 (build arch: %3, CPU arch: %4)")
-                               .arg(QSysInfo::productType(), QSysInfo::kernelVersion(), QSysInfo::buildCpuArchitecture(), Utility::currentCpuArch())};
+    QStringList sysInfo = {QStringLiteral("OS: %1-%2 (kernel: %3, build arch: %4, CPU arch: %5)")
+            .arg(QSysInfo::productType(), QSysInfo::productVersion(), QSysInfo::kernelVersion(), QSysInfo::buildCpuArchitecture(), Utility::currentCpuArch())};
     // may be called by both GUI and CLI, but we can display QPA only for the former
     if (auto guiApp = qobject_cast<QGuiApplication *>(qApp)) {
         sysInfo << QStringLiteral("QPA: %1").arg(guiApp->platformName());
@@ -318,11 +318,6 @@ QIcon Theme::wizardHeaderLogo() const
     return applicationIcon();
 }
 
-bool Theme::forceSystemNetworkProxy() const
-{
-    return false;
-}
-
 QString Theme::oauthClientId() const
 {
     return QStringLiteral("OpenCloudDesktop");
@@ -342,16 +337,6 @@ QVector<quint16> Theme::oauthPorts() const
 {
     // zero means a random port
     return {0};
-}
-
-QString Theme::openIdConnectScopes() const
-{
-    return QStringLiteral("openid offline_access email profile");
-}
-
-QString Theme::openIdConnectPrompt() const
-{
-    return QStringLiteral("select_account consent");
 }
 
 bool Theme::oidcEnableDynamicRegistration() const

@@ -60,25 +60,6 @@ QString OCC::Utility::enumToDisplayName(CF_CALLBACK_DEHYDRATION_REASON reason)
 namespace {
 
 std::mutex sRegister_mutex;
-
-constexpr auto forbiddenLeadingCharacterInPath = '#'_L1;
-
-QString createErrorMessageForPlaceholderUpdateAndCreate(const QString &path, const QString &originalErrorMessage)
-{
-    const auto pathFromNativeSeparators = QDir::fromNativeSeparators(path);
-    if (!pathFromNativeSeparators.contains(QStringLiteral("/%1").arg(forbiddenLeadingCharacterInPath))) {
-        return originalErrorMessage;
-    }
-    const auto fileComponents = pathFromNativeSeparators.split('/'_L1);
-    for (const auto &fileComponent : fileComponents) {
-        if (fileComponent.startsWith(forbiddenLeadingCharacterInPath)) {
-            qCInfo(lcCfApiWrapper) << u"Failed to create/update a placeholder for path \"" << pathFromNativeSeparators << u"\" that has a leading '#'.";
-            return {u"%1: %2"_s.arg(originalErrorMessage, QObject::tr("Paths beginning with '#' character are not supported in VFS mode."))};
-        }
-    }
-    return originalErrorMessage;
-}
-
 // retreive the pllaceholder info, by default we don't request the full FileIdentity
 OCC::Result<std::vector<char>, int64_t> getPlaceholderInfo(
     const OCC::Utility::Handle &handle, CF_PLACEHOLDER_INFO_CLASS infoClass = CF_PLACEHOLDER_INFO_BASIC, bool withFileIdentity = false)
@@ -146,7 +127,7 @@ void CALLBACK cfApiFetchDataCallback(const CF_CALLBACK_INFO *callbackInfo, const
 }
 
 OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString> updatePlaceholderState(
-    const QString &path, time_t modtime, qint64 size, const QByteArray &fileId, const QString &replacesPath)
+    const QString &path, time_t modtime, qint64 size, const QByteArray &fileId, const QString &replacesPath, bool isHydrated)
 {
     OCC::CfApiWrapper::PlaceHolderInfo<CF_PLACEHOLDER_BASIC_INFO> info;
     if (!replacesPath.isEmpty()) {
@@ -162,20 +143,29 @@ OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString> updatePlaceholderStat
 
     const auto previousPinState = info.pinState();
 
-    CF_FS_METADATA metadata = {};
-    metadata.FileSize.QuadPart = size;
-    OCC::Utility::UnixTimeToLargeIntegerFiletime(modtime, &metadata.BasicInfo.CreationTime);
-    metadata.BasicInfo.LastWriteTime = metadata.BasicInfo.CreationTime;
-    metadata.BasicInfo.LastAccessTime = metadata.BasicInfo.CreationTime;
-    metadata.BasicInfo.ChangeTime = metadata.BasicInfo.CreationTime;
+    std::optional<CF_FS_METADATA> metadata;
+    if (!isHydrated) {
+        metadata.emplace();
+        metadata->FileSize.QuadPart = size;
+        OCC::Utility::UnixTimeToLargeIntegerFiletime(modtime, &metadata->BasicInfo.CreationTime);
+        metadata->BasicInfo.LastWriteTime = metadata->BasicInfo.CreationTime;
+        metadata->BasicInfo.LastAccessTime = metadata->BasicInfo.CreationTime;
+        metadata->BasicInfo.ChangeTime = metadata->BasicInfo.CreationTime;
+    }
 
     qCInfo(lcCfApiWrapper) << u"updatePlaceholderState" << path << modtime << fileId;
-    const qint64 result = CfUpdatePlaceholder(OCC::Utility::Handle::createHandle(OCC::FileSystem::toFilesystemPath(path)), &metadata, fileId.data(),
-        static_cast<DWORD>(fileId.size()), nullptr, 0, CF_UPDATE_FLAG_MARK_IN_SYNC, nullptr, nullptr);
+    auto handle = OCC::Utility::Handle::createHandle(OCC::FileSystem::toFilesystemPath(path));
+    if (!handle) {
+        const QString errorMessage = u"Couldn't create handle for placeholder %1 Error: %2"_s.arg(path, handle.errorMessage());
+        qCWarning(lcCfApiWrapper) << errorMessage << replacesPath;
+        return errorMessage;
+    }
+    const qint64 result = CfUpdatePlaceholder(handle, metadata ? &metadata.value() : nullptr, fileId.data(), static_cast<DWORD>(fileId.size()), nullptr, 0,
+        CF_UPDATE_FLAG_MARK_IN_SYNC, nullptr, nullptr);
 
     if (result != S_OK) {
-        const QString errorMessage = createErrorMessageForPlaceholderUpdateAndCreate(path, u"Couldn't update placeholder info"_s);
-        qCWarning(lcCfApiWrapper) << errorMessage << path << u":" << OCC::Utility::formatWinError(result) << replacesPath;
+        const QString errorMessage = u"Couldn't update placeholder info %1 Error: %2"_s.arg(path, OCC::Utility::formatWinError(result));
+        qCWarning(lcCfApiWrapper) << errorMessage << replacesPath;
         return errorMessage;
     }
 
@@ -223,7 +213,7 @@ void CALLBACK cfApiRename(const CF_CALLBACK_INFO *callbackInfo, const CF_CALLBAC
     if (callbackParameters->Rename.Flags & (CF_CALLBACK_RENAME_FLAG_TARGET_IN_SCOPE | CF_CALLBACK_RENAME_FLAG_SOURCE_IN_SCOPE) &&
         // CF_CALLBACK_RENAME_FLAG_TARGET_IN_SCOPE is also set for any other sync root we manage
         // but in that case windows will hydrate the file before its moved
-        OCC::FileSystem::isChildPathOf(target, context.vfs->params().filesystemPath) && context.vfs->isDehydratedPlaceholder(context.path)
+        OCC::FileSystem::isChildPathOf(target, context.vfs->params().filesystemPath()) && context.vfs->isDehydratedPlaceholder(context.path)
         && context.vfs->params().syncEngine()->isExcluded(qtPath)) {
         reject = true;
     }
@@ -356,7 +346,7 @@ QString createSyncRootID(const QString &providerName, const QUuid &accountUUID, 
 
 void OCC::CfApiWrapper::registerSyncRoot(const VfsSetupParams &params, const std::function<void(QString)> &callback)
 {
-    const auto nativePath = QDir::toNativeSeparators(params.filesystemPath);
+    const auto nativePath = QDir::toNativeSeparators(params.filesystemPath());
     winrt::StorageFolder::GetFolderFromPathAsync(reinterpret_cast<const wchar_t *>(nativePath.utf16()))
         .Completed([params, callback](const winrt::IAsyncOperation<winrt::StorageFolder> &result, winrt::AsyncStatus status) {
             if (status != winrt::AsyncStatus::Completed) {
@@ -365,7 +355,7 @@ void OCC::CfApiWrapper::registerSyncRoot(const VfsSetupParams &params, const std
             }
             try {
                 const auto iconPath = QCoreApplication::applicationFilePath();
-                const auto id = createSyncRootID(params.providerName, params.account->uuid(), params.filesystemPath);
+                const auto id = createSyncRootID(params.providerName, params.account->uuid(), params.filesystemPath());
                 const auto version = params.providerVersion.toString();
 
                 winrt::StorageProviderSyncRootInfo info;
@@ -400,7 +390,7 @@ void OCC::CfApiWrapper::registerSyncRoot(const VfsSetupParams &params, const std
                 }
                 callback({});
             } catch (const winrt::hresult_error &ex) {
-                callback(u"Failed to register sync root %1: %2"_s.arg(params.filesystemPath, Utility::formatWinError(ex.code())));
+                callback(u"Failed to register sync root %1: %2"_s.arg(params.filesystemPath(), Utility::formatWinError(ex.code())));
             }
         });
 }
@@ -431,7 +421,7 @@ OCC::Result<void, QString> OCC::CfApiWrapper::unregisterSyncRoot(const VfsSetupP
     try {
         std::lock_guard lock(sRegister_mutex);
         winrt::StorageProviderSyncRootManager::Unregister(
-            reinterpret_cast<const wchar_t *>(createSyncRootID(params.providerName, params.account->uuid(), params.filesystemPath).utf16()));
+            reinterpret_cast<const wchar_t *>(createSyncRootID(params.providerName, params.account->uuid(), params.filesystemPath()).utf16()));
     } catch (winrt::hresult_error const &ex) {
         return u"unregisterSyncRoot failed: %1"_s.arg(Utility::formatWinError(ex.code()));
     }
@@ -476,13 +466,24 @@ OCC::Result<void, QString> OCC::CfApiWrapper::disconnectSyncRoot(CF_CONNECTION_K
         return {};
     }
 }
-
-
-bool OCC::CfApiWrapper::isSparseFile(const QString &path)
+bool OCC::CfApiWrapper::isDehydratedPlaceholder(const FileSystem::Path &path)
 {
-    const auto p = path.toStdWString();
-    const auto attributes = GetFileAttributes(p.data());
-    return (attributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0;
+    const auto handle = OCC::Utility::Handle::createHandle(path);
+    if (!handle) {
+        qCWarning(lcCfApiWrapper) << u"Failed to get file handle" << path << handle.errorMessage();
+        return false;
+    }
+    FILE_ATTRIBUTE_TAG_INFO targInfo = {};
+    if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &targInfo, sizeof(targInfo))) {
+        const auto error = GetLastError();
+        qCWarning(lcCfApiWrapper) << u"Failed to get file attribute tag info for" << path << OCC::Utility::formatWinError(error);
+        return false;
+    }
+    const CF_PLACEHOLDER_STATE state = CfGetPlaceholderStateFromAttributeTag(targInfo.FileAttributes, targInfo.ReparseTag);
+    if (state == CF_PLACEHOLDER_STATE_NO_STATES) {
+        return false;
+    }
+    return state & CF_PLACEHOLDER_STATE_PARTIAL;
 }
 
 template <>
@@ -517,7 +518,13 @@ OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString> OCC::CfApiWrapper::se
     const auto cfState = pinStateToCfPinState(state);
     const auto flags = pinRecurseModeToCfSetPinFlags(mode);
 
-    const qint64 result = CfSetPinState(OCC::Utility::Handle::createHandle(OCC::FileSystem::toFilesystemPath(path)), cfState, flags, nullptr);
+    auto handle = OCC::Utility::Handle::createHandle(OCC::FileSystem::toFilesystemPath(path));
+    if (!handle) {
+        qCWarning(lcCfApiWrapper) << u"Couldn't create handle for pin state" << path << u":" << handle.errorMessage();
+        return {u"Couldn't create handle for pin state: %s"_s.arg(handle.errorMessage())};
+    }
+
+    const qint64 result = CfSetPinState(handle, cfState, flags, nullptr);
     if (result == S_OK) {
         return OCC::Vfs::ConvertToPlaceholderResult::Ok;
     } else {
@@ -570,53 +577,66 @@ OCC::Result<void, QString> OCC::CfApiWrapper::createPlaceholderInfo(const QStrin
 }
 
 OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString> OCC::CfApiWrapper::updatePlaceholderInfo(
-    const QString &path, time_t modtime, qint64 size, const QByteArray &fileId, const QString &replacesPath)
+    const QString &path, time_t modtime, qint64 size, const QByteArray &fileId, const QString &replacesPath, bool isHydrated)
 {
-    return updatePlaceholderState(path, modtime, size, fileId, replacesPath);
+    return updatePlaceholderState(path, modtime, size, fileId, replacesPath, isHydrated);
 }
 
-OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString> OCC::CfApiWrapper::dehydratePlaceholder(const QString &path, qint64 size, const QByteArray &fileId)
+OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString> OCC::CfApiWrapper::dehydratePlaceholder(const QString &path, const QByteArray &fileId)
 {
     const auto info = findPlaceholderInfo<CF_PLACEHOLDER_BASIC_INFO>(path);
     if (info) {
-        setPinState(path, OCC::PinState::OnlineOnly, OCC::CfApiWrapper::NoRecurse);
-
-        CF_FILE_RANGE dehydrationRange = {};
-        dehydrationRange.Length.QuadPart = size;
-
-        const qint64 result = CfUpdatePlaceholder(Utility::Handle::createHandle(OCC::FileSystem::toFilesystemPath(path)), nullptr, fileId.data(),
-            static_cast<DWORD>(fileId.size()), &dehydrationRange, 1, CF_UPDATE_FLAG_MARK_IN_SYNC | CF_UPDATE_FLAG_DEHYDRATE, nullptr, nullptr);
+        auto handle = Utility::Handle::createHandle(OCC::FileSystem::toFilesystemPath(path));
+        if (!handle) {
+            const auto errorMessage = u"Couldn't create handle for placeholder %1 Error: %2"_s.arg(path, handle.errorMessage());
+            qCWarning(lcCfApiWrapper) << errorMessage;
+            return errorMessage;
+        }
+        const qint64 result = CfUpdatePlaceholder(handle, nullptr, fileId.data(), static_cast<DWORD>(fileId.size()), nullptr, 0,
+            CF_UPDATE_FLAG_MARK_IN_SYNC | CF_UPDATE_FLAG_DEHYDRATE, nullptr, nullptr);
         if (result != S_OK) {
-            const auto errorMessage = createErrorMessageForPlaceholderUpdateAndCreate(path, u"Couldn't update placeholder info"_s);
-            qCWarning(lcCfApiWrapper) << errorMessage << path << u":" << OCC::Utility::formatWinError(result);
+            const auto errorMessage = u"Couldn't update placeholder info %1 Error: %2"_s.arg(path, OCC::Utility::formatWinError(result));
+            qCWarning(lcCfApiWrapper) << errorMessage << path;
             return errorMessage;
         }
     } else {
-        const qint64 result = CfConvertToPlaceholder(Utility::Handle::createHandle(OCC::FileSystem::toFilesystemPath(path)), fileId.data(),
-            static_cast<DWORD>(fileId.size()), CF_CONVERT_FLAG_MARK_IN_SYNC | CF_CONVERT_FLAG_DEHYDRATE, nullptr, nullptr);
-
-        if (result != S_OK) {
-            const auto errorMessage = createErrorMessageForPlaceholderUpdateAndCreate(path, u"Couldn't convert to placeholder"_s);
-            qCWarning(lcCfApiWrapper) << errorMessage << path << u":" << OCC::Utility::formatWinError(result);
+        auto handle = Utility::Handle::createHandle(OCC::FileSystem::toFilesystemPath(path));
+        if (!handle) {
+            const auto errorMessage = u"Couldn't create handle for placeholder %1 Error: %2"_s.arg(path, handle.errorMessage());
+            qCWarning(lcCfApiWrapper) << errorMessage;
             return errorMessage;
         }
-    }
+        const qint64 result = CfConvertToPlaceholder(
+            handle, fileId.data(), static_cast<DWORD>(fileId.size()), CF_CONVERT_FLAG_MARK_IN_SYNC | CF_CONVERT_FLAG_DEHYDRATE, nullptr, nullptr);
 
+        if (result != S_OK) {
+            const auto errorMessage = u"Couldn't convert to placeholder %1 Error: %2"_s.arg(path, OCC::Utility::formatWinError(result));
+            qCWarning(lcCfApiWrapper) << errorMessage;
+            return errorMessage;
+        }
+        setPinState(path, OCC::PinState::OnlineOnly, OCC::CfApiWrapper::NoRecurse);
+    }
     return OCC::Vfs::ConvertToPlaceholderResult::Ok;
 }
 
 OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString> OCC::CfApiWrapper::convertToPlaceholder(
     const QString &path, time_t modtime, qint64 size, const QByteArray &fileId, const QString &replacesPath)
 {
-    const qint64 result = CfConvertToPlaceholder(Utility::Handle::createHandle(OCC::FileSystem::toFilesystemPath(path)), fileId.data(),
-        static_cast<DWORD>(fileId.size()), CF_CONVERT_FLAG_MARK_IN_SYNC, nullptr, nullptr);
-    Q_ASSERT(result == S_OK);
-    if (result != S_OK) {
-        const auto errorMessage = createErrorMessageForPlaceholderUpdateAndCreate(path, u"Couldn't convert to placeholder"_s);
-        qCWarning(lcCfApiWrapper) << errorMessage << path << u":" << OCC::Utility::formatWinError(result);
+    auto handle = Utility::Handle::createHandle(OCC::FileSystem::toFilesystemPath(path));
+    if (!handle) {
+        const auto errorMessage = u"Couldn't create handle for placeholder %1 Error: %2"_s.arg(path, handle.errorMessage());
+        qCWarning(lcCfApiWrapper) << errorMessage << path;
         return errorMessage;
     }
-    return updatePlaceholderState(path, modtime, size, fileId, replacesPath);
+    const qint64 result = CfConvertToPlaceholder(handle, fileId.data(), static_cast<DWORD>(fileId.size()), CF_CONVERT_FLAG_MARK_IN_SYNC, nullptr, nullptr);
+    Q_ASSERT(result == S_OK);
+    if (result != S_OK) {
+        const auto errorMessage = u"Couldn't convert to placeholder %1 Error: %2"_s.arg(path, OCC::Utility::formatWinError(result));
+        qCWarning(lcCfApiWrapper) << errorMessage << path;
+        return errorMessage;
+    }
+    // we are converting an existing file, so it must be hydrated
+    return updatePlaceholderState(path, modtime, size, fileId, replacesPath, true);
 }
 
 OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString> OCC::CfApiWrapper::updatePlaceholderMarkInSync(const Utility::Handle &handle)

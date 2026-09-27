@@ -17,19 +17,23 @@
  */
 
 #include "vfs.h"
-#include "../common/plugin.h"
-#include "../common/syncjournaldb.h"
-#include "common/filesystembase.h"
-#include "common/version.h"
 
+#include "libsync/common/filesystembase.h"
+#include "libsync/common/plugin.h"
+#include "libsync/common/syncjournaldb.h"
+#include "libsync/common/version.h"
+#include "libsync/filesystem.h"
+#include "libsync/syncengine.h"
+
+#include <QApplication>
 #include <QCoreApplication>
-#include <QDir>
 #include <QLoggingCategory>
 #include <QPluginLoader>
 
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
+
 using namespace OCC;
 using namespace Qt::Literals::StringLiterals;
 
@@ -48,9 +52,11 @@ Optional<Vfs::Mode> Vfs::modeFromString(const QString &str)
     // Note: Strings are used for config and must be stable
     // keep in sync with: QString Utility::enumToString(Vfs::Mode mode)
     if (str == QLatin1String("off")) {
-        return Off;
+        return Mode::Off;
     } else if (str == QLatin1String("cfapi")) {
-        return WindowsCfApi;
+        return Mode::WindowsCfApi;
+    } else if (str == QLatin1String("openvfs")) {
+        return Mode::OpenVFS;
     }
     return {};
 }
@@ -65,43 +71,10 @@ QString Utility::enumToString(Vfs::Mode mode)
         return QStringLiteral("cfapi");
     case Vfs::Mode::Off:
         return QStringLiteral("off");
+    case Vfs::Mode::OpenVFS:
+        return QStringLiteral("openvfs");
     }
     Q_UNREACHABLE();
-}
-
-Result<void, QString> Vfs::checkAvailability(const QString &path, Vfs::Mode mode)
-{
-#ifdef Q_OS_WIN
-    const auto canonicalPath = [path] {
-        QFileInfo info(path);
-        if (info.exists()) {
-            return info.canonicalFilePath();
-        } else {
-            return info.absoluteFilePath();
-        }
-    }();
-    const auto fileSystem = FileSystem::fileSystemForPath(canonicalPath);
-    if (fileSystem.startsWith("ReFS"_L1, Qt::CaseInsensitive)) {
-        return tr("ReFS is currently not supported.");
-    }
-    if (mode == Mode::WindowsCfApi) {
-        if (QDir(canonicalPath).isRoot()) {
-            return tr("The Virtual filesystem feature does not support a drive as sync root");
-        }
-
-        if (!fileSystem.startsWith("NTFS"_L1, Qt::CaseInsensitive)) {
-            return tr("The Virtual filesystem feature requires a NTFS file system, %1 is using %2").arg(path, fileSystem);
-        }
-        const auto type = GetDriveTypeW(reinterpret_cast<const wchar_t *>(canonicalPath.mid(0, 3).utf16()));
-        if (type == DRIVE_REMOTE) {
-            return tr("The Virtual filesystem feature is not supported on network drives");
-        }
-    }
-#else
-    Q_UNUSED(mode);
-    Q_UNUSED(path);
-#endif
-    return {};
 }
 
 void Vfs::start(const VfsSetupParams &params)
@@ -128,7 +101,7 @@ void Vfs::wipeDehydratedVirtualFiles()
 
         // If the local file is a dehydrated placeholder, wipe it too.
         // Otherwise leave it to allow the next sync to have a new-new conflict.
-        const QString absolutePath = _setupParams->filesystemPath + relativePath;
+        const auto absolutePath = QString(_setupParams->root() / relativePath);
         if (QFile::exists(absolutePath)) {
             // according to our db this is a dehydrated file, check it  to be sure
             if (isDehydratedPlaceholder(absolutePath)) {
@@ -144,10 +117,10 @@ void Vfs::wipeDehydratedVirtualFiles()
     // But hydrated placeholders may still be around.
 }
 
-QFuture<Result<void, QString>> Vfs::hydrateFile(const QByteArray &, const QString &)
+HydrationJob* Vfs::hydrateFile(const QByteArray&, const QString&)
 {
     // nothing to do
-    return QtFuture::makeReadyValueFuture(Result<void, QString>{});
+    return nullptr;
 }
 
 Q_LOGGING_CATEGORY(lcPlugin, "sync.plugins", QtInfoMsg)
@@ -156,16 +129,50 @@ OCC::VfsPluginManager *OCC::VfsPluginManager::_instance = nullptr;
 
 bool OCC::VfsPluginManager::isVfsPluginAvailable(Vfs::Mode mode) const
 {
-    {
-        auto result = _pluginCache.constFind(mode);
-        if (result != _pluginCache.cend()) {
-            return *result;
-        }
+    return createPluginFactoryInternal(mode) != nullptr;
+}
+
+Vfs::Mode OCC::VfsPluginManager::bestAvailableVfsMode() const
+{
+    if (isVfsPluginAvailable(Vfs::Mode::WindowsCfApi)) {
+        return Vfs::Mode::WindowsCfApi;
+    } else if (isVfsPluginAvailable(Vfs::Mode::OpenVFS)) {
+        return Vfs::Mode::OpenVFS;
+    } else if (isVfsPluginAvailable(Vfs::Mode::Off)) {
+        return Vfs::Mode::Off;
     }
-    const bool out = [mode] {
+    Q_UNREACHABLE();
+}
+
+
+std::pair<QString, PluginFactory *> OCC::VfsPluginManager::createVfsPluginFactory(Vfs::Mode mode) const
+{
+    auto name = Utility::enumToString(mode);
+    if (name.isEmpty())
+        return {};
+    auto pluginPath = pluginFileName(QStringLiteral("vfs"), name);
+
+    if (!isVfsPluginAvailable(mode)) {
+        qCCritical(lcPlugin) << u"Could not load plugin: not existent or bad metadata" << pluginPath;
+        return {pluginPath, nullptr};
+    }
+
+    auto factory = createPluginFactoryInternal(mode);
+    if (!factory) {
+        return {pluginPath, nullptr};
+    }
+
+    return {pluginPath, factory};
+}
+PluginFactory *VfsPluginManager::createPluginFactoryInternal(Vfs::Mode mode) const
+{
+    if (auto result = _pluginCache.constFind(mode); result != _pluginCache.cend()) {
+        return *result;
+    }
+    return _pluginCache[mode] = [mode]() -> PluginFactory * {
         const QString name = Utility::enumToString(mode);
         if (!OC_ENSURE_NOT(name.isEmpty())) {
-            return false;
+            return nullptr;
         }
         auto pluginPath = pluginFileName(QStringLiteral("vfs"), name);
         QPluginLoader loader(pluginPath);
@@ -173,79 +180,79 @@ bool OCC::VfsPluginManager::isVfsPluginAvailable(Vfs::Mode mode) const
         auto basemeta = loader.metaData();
         if (basemeta.isEmpty() || !basemeta.contains(QStringLiteral("IID"))) {
             qCDebug(lcPlugin) << u"Plugin doesn't exist:" << loader.fileName() << u"LibraryPath:" << QCoreApplication::libraryPaths();
-            return false;
+            return nullptr;
         }
         if (basemeta[QStringLiteral("IID")].toString() != QLatin1String("eu.opencloud.PluginFactory")) {
             qCWarning(lcPlugin) << u"Plugin has wrong IID" << loader.fileName() << basemeta[QStringLiteral("IID")];
-            return false;
+            return nullptr;
         }
 
         auto metadata = basemeta[QStringLiteral("MetaData")].toObject();
         if (metadata[QStringLiteral("type")].toString() != QLatin1String("vfs")) {
             qCWarning(lcPlugin) << u"Plugin has wrong type" << loader.fileName() << metadata[QStringLiteral("type")];
-            return false;
+            return nullptr;
         }
         if (metadata[QStringLiteral("version")].toString() != OCC::Version::version().toString()) {
             qCWarning(lcPlugin) << u"Plugin has wrong version" << loader.fileName() << metadata[QStringLiteral("version")];
-            return false;
+            return nullptr;
         }
 
         // Attempting to load the plugin is essential as it could have dependencies that
         // can't be resolved and thus not be available after all.
         if (!loader.load()) {
             qCWarning(lcPlugin) << u"Plugin failed to load:" << loader.errorString();
-            return false;
+            return nullptr;
         }
 
-        return true;
-    }();
-    _pluginCache[mode] = out;
-    return out;
-}
+        auto plugin = loader.instance();
+        if (!plugin) {
+            qCCritical(lcPlugin) << u"Could not load plugin" << pluginPath << loader.errorString();
+            return nullptr;
+        }
 
-Vfs::Mode OCC::VfsPluginManager::bestAvailableVfsMode() const
-{
-    if (isVfsPluginAvailable(Vfs::WindowsCfApi)) {
-        return Vfs::WindowsCfApi;
-    } else if (isVfsPluginAvailable(Vfs::Off)) {
-        return Vfs::Off;
-    }
-    Q_UNREACHABLE();
+        auto factory = qobject_cast<PluginFactory *>(plugin);
+        if (!factory) {
+            qCCritical(lcPlugin) << u"Plugin" << loader.fileName() << u"does not implement PluginFactory";
+            return nullptr;
+        }
+        if (!factory->checkAvailability()) {
+            qCCritical(lcPlugin) << u"Plugin" << loader.fileName() << u"does not implement PluginFactory";
+            return nullptr;
+        }
+        return factory;
+    }();
 }
 
 std::unique_ptr<Vfs> OCC::VfsPluginManager::createVfsFromPlugin(Vfs::Mode mode) const
 {
-    auto name = Utility::enumToString(mode);
-    if (name.isEmpty())
-        return nullptr;
-    auto pluginPath = pluginFileName(QStringLiteral("vfs"), name);
+    const auto [pluginPath, factory] = createVfsPluginFactory(mode);
+    if (factory) {
+        auto vfs = std::unique_ptr<Vfs>(qobject_cast<Vfs *>(factory->create(nullptr)));
+        if (!vfs) {
+            qCCritical(lcPlugin) << u"Plugin" << pluginPath << u"does not create a Vfs instance";
+            return nullptr;
+        }
 
-    if (!isVfsPluginAvailable(mode)) {
-        qCCritical(lcPlugin) << u"Could not load plugin: not existant or bad metadata" << pluginPath;
-        return nullptr;
+        qCInfo(lcPlugin) << u"Created VFS instance from plugin" << pluginPath;
+        return vfs;
+    }
+    return nullptr;
+}
+
+Result<void, QString> VfsPluginManager::prepare(const QString &path, const QUuid &accountUuid, Vfs::Mode mode) const
+{
+    const auto canonicalPath = FileSystem::canonicalPath(path);
+#ifdef Q_OS_WIN
+    if (FileSystem::fileSystemForPath(canonicalPath).startsWith("ReFS"_L1, Qt::CaseInsensitive)) {
+        return QApplication::translate("VfsPluginManager", "ReFS is currently not supported.");
+    }
+#endif
+    const auto [pluginPath, factory] = createVfsPluginFactory(mode);
+    if (factory) {
+        return factory->prepare(canonicalPath, accountUuid);
     }
 
-    QPluginLoader loader(pluginPath);
-    auto plugin = loader.instance();
-    if (!plugin) {
-        qCCritical(lcPlugin) << u"Could not load plugin" << pluginPath << loader.errorString();
-        return nullptr;
-    }
-
-    auto factory = qobject_cast<PluginFactory *>(plugin);
-    if (!factory) {
-        qCCritical(lcPlugin) << u"Plugin" << loader.fileName() << u"does not implement PluginFactory";
-        return nullptr;
-    }
-
-    auto vfs = std::unique_ptr<Vfs>(qobject_cast<Vfs *>(factory->create(nullptr)));
-    if (!vfs) {
-        qCCritical(lcPlugin) << u"Plugin" << loader.fileName() << u"does not create a Vfs instance";
-        return nullptr;
-    }
-
-    qCInfo(lcPlugin) << u"Created VFS instance from plugin" << pluginPath;
-    return vfs;
+    return QApplication::translate("VfsPluginManager", "The Virtual filesystem %1 is not supported on this platform").arg(Utility::enumToString(mode));
 }
 
 const VfsPluginManager &VfsPluginManager::instance()
@@ -262,7 +269,9 @@ VfsSetupParams::VfsSetupParams(const AccountPtr &account, const QUrl &baseUrl, c
     , _syncEngine(syncEngine)
     , _spaceId(spaceId)
     , _folderDisplayName(folderDisplayName)
+    , _root(syncEngine->localPath())
 {
+    Q_ASSERT(filesystemPath().endsWith('/'_L1));
 }
 
 QString VfsSetupParams::folderDisplayName() const
@@ -273,4 +282,14 @@ QString VfsSetupParams::folderDisplayName() const
 SyncEngine *VfsSetupParams::syncEngine() const
 {
     return _syncEngine;
+}
+
+QString VfsSetupParams::filesystemPath() const
+{
+    return _root.toString();
+}
+
+const FileSystem::Path &VfsSetupParams::root() const
+{
+    return _root;
 }

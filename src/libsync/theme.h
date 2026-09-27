@@ -199,14 +199,6 @@ public:
     virtual bool wizardSkipAdvancedPage() const;
 
     /**
-     * If this returns true, the user cannot configure the proxy in the network settings.
-     * The proxy settings will be disabled in the configuration dialog.
-     * Default returns false.
-     */
-    virtual bool forceSystemNetworkProxy() const;
-
-
-    /**
      * The OAuth client_id, secret pair.
      * Note that client that change these value cannot connect to un-branded OpenCloud.
      */
@@ -226,19 +218,6 @@ public:
      * List of ports to use for the local redirect server
      */
     virtual QVector<quint16> oauthPorts() const;
-
-    /**
-     * Returns the required opeidconnect scopes
-     */
-    virtual QString openIdConnectScopes() const;
-
-    /**
-     * Returns the openidconnect promt type
-     * It is supposed to be "consent select_account".
-     * For Konnect it currently needs to be select_account,
-     * which is the current default.
-     */
-    virtual QString openIdConnectPrompt() const;
 
     /**
      * Defines whether the client attempts danamic registration with the IdP or uses the

@@ -47,7 +47,7 @@ Credentials {
                 horizontalPadding: 64
                 enabled: credentials.ready
                 visible: credentials.isValid
-                icon.source: OpenCloud.resourcePath("fontawesome", "", true)
+                icon.source: OCUtils.resourcePath("fontawesome", "", true)
                 text: browserWasOpened ? qsTr("Reopen web browser") : qsTr("Open web browser")
                 onClicked: {
                     browserWasOpened = true;
@@ -65,7 +65,7 @@ Credentials {
                 visible: credentials.isValid
 
                 text: qsTr("Copy URL")
-                icon.source: OpenCloud.resourcePath("fontawesome", "", true)
+                icon.source: OCUtils.resourcePath("fontawesome", "", true)
                 onClicked: credentials.copyAuthenticationUrlToClipboard()
                 enabled: credentials.ready
 
@@ -78,7 +78,8 @@ Credentials {
                     // there is no logout button
                     if (!credentials.isRefresh) {
                         widget.parentFocusWidget.focusNext();
-                        event.accepted = true;
+                    } else {
+                        event.accepted = false;
                     }
                 }
             }
@@ -91,17 +92,21 @@ Credentials {
             }
         }
 
-        Button {
-            id: restartButton
-            Layout.alignment: Qt.AlignHCenter
-            Layout.preferredWidth: openBrowserButton.width
-            visible: !credentials.isValid
-            icon.source: OpenCloud.resourcePath("fontawesome", "", true)
-            text: qsTr("Restart authentication")
-            onClicked: credentials.requestRestart()
-
-            Keys.onBacktabPressed: {
-                widget.parentFocusWidget.focusPrevious();
+        ColumnLayout {
+            Button {
+                id: restartButton
+                Layout.alignment: Qt.AlignHCenter
+                Layout.preferredWidth: openBrowserButton.width
+                visible: !credentials.isValid
+                icon.source: OCUtils.resourcePath("fontawesome", "", true)
+                text: qsTr("Restart authentication")
+                onClicked: credentials.requestRestart()
+            }
+            Loader {
+                Layout.preferredWidth: openBrowserButton.implicitWidth
+                Layout.maximumHeight: 42 // See https://github.com/owncloud/client/issues/11928 why we limit the height
+                Layout.alignment: Qt.AlignHCenter
+                sourceComponent: logOutButton
             }
         }
     }

@@ -14,6 +14,8 @@
 
 #include "platform.h"
 
+#include <QNetworkProxyFactory>
+
 #if defined(Q_OS_WIN)
 #include "platform_win.h"
 #elif defined(Q_OS_MACOS)
@@ -42,10 +44,6 @@ Platform::Platform(Type t)
 
 void Platform::setApplication([[maybe_unused]] QCoreApplication *application)
 {
-    if (qobject_cast<QApplication *>(application)) {
-        QFontDatabase::addApplicationFont(QStringLiteral(":/client/font-awesome/Font Awesome 6 Free-Solid-900.otf"));
-        QFontDatabase::addApplicationFont(QStringLiteral(":/client/remixicon/remixicon.ttf"));
-    }
 #ifdef CRASHREPORTER_EXECUTABLE
     if (ConfigFile().crashReporter()) {
         auto *crashHandler =
@@ -67,6 +65,8 @@ std::unique_ptr<Platform> Platform::create(Type t)
     // we need to make sure the platform class is initialized before a Q(Core)Application has been set up
     // the constructors run some initialization code that affects Qt's initialization
     Q_ASSERT(QCoreApplication::instance() == nullptr);
+
+    QNetworkProxyFactory::setUseSystemConfiguration(true);
 
     return std::unique_ptr<Platform>{
 #if defined(Q_OS_WIN)

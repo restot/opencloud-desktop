@@ -50,15 +50,13 @@ private Q_SLOTS:
         QTest::addColumn<Vfs::Mode>("vfsMode");
         QTest::addColumn<bool>("filesAreDehydrated");
 
-        QTest::newRow("Vfs::Off") << Vfs::Off << false;
+        QTest::newRow("Vfs::Mode::Off") << Vfs::Mode::Off << false;
 
-        if (VfsPluginManager::instance().isVfsPluginAvailable(Vfs::WindowsCfApi)) {
-            QTest::newRow("Vfs::WindowsCfApi dehydrated") << Vfs::WindowsCfApi << true;
-
-            // TODO: the hydrated version will fail due to an issue in the winvfs plugin, so leave it disabled for now.
-            // QTest::newRow("Vfs::WindowsCfApi hydrated") << Vfs::WindowsCfApi << false;
+        if (VfsPluginManager::instance().isVfsPluginAvailable(Vfs::Mode::WindowsCfApi)) {
+            QTest::newRow("Vfs::Mode::WindowsCfApi dehydrated") << Vfs::Mode::WindowsCfApi << true;
+            QTest::newRow("Vfs::Mode::WindowsCfApi hydrated") << Vfs::Mode::WindowsCfApi << false;
         } else if (Utility::isWindows()) {
-            qWarning("Skipping Vfs::WindowsCfApi");
+            qWarning("Skipping Vfs::Mode::WindowsCfApi");
         }
     }
 
@@ -205,7 +203,7 @@ private Q_SLOTS:
         QFETCH_GLOBAL(Vfs::Mode, vfsMode);
         QFETCH_GLOBAL(bool, filesAreDehydrated);
 
-        if (vfsMode == Vfs::WindowsCfApi) {
+        if (vfsMode == Vfs::Mode::WindowsCfApi) {
             QSKIP("selective sync is not supported with winvfs");
         }
 
@@ -444,7 +442,7 @@ private Q_SLOTS:
         QFETCH_GLOBAL(Vfs::Mode, vfsMode);
         QFETCH_GLOBAL(bool, filesAreDehydrated);
 
-        if (vfsMode == Vfs::WindowsCfApi && filesAreDehydrated) {
+        if (vfsMode == Vfs::Mode::WindowsCfApi && filesAreDehydrated) {
             QSKIP("This test expects files to exist in the sync folder before a sync.");
         }
 
@@ -698,6 +696,30 @@ private Q_SLOTS:
         QVERIFY(fakeFolder.applyLocalModificationsAndSync());
         QVERIFY(localFileExists(QStringLiteral("A/.hidden")));
         QVERIFY(fakeFolder.currentRemoteState().find(QStringLiteral("B/.hidden")));
+    }
+
+    void testRenameExcludedFile()
+    {
+        if (!VfsPluginManager::instance().isVfsPluginAvailable(Vfs::Mode::OpenVFS)) {
+            QSKIP("Pin states require the OpenVFS plugin");
+        }
+
+        FakeFolder fakeFolder(FileInfo::A12_B12_C12_S12(), Vfs::Mode::OpenVFS, false);
+        fakeFolder.syncEngine().setIgnoreHiddenFiles(true);
+
+        fakeFolder.localModifier().rename(QStringLiteral("A/a1"), QStringLiteral("A/.a1"));
+        QVERIFY(fakeFolder.applyLocalModificationsAndSync());
+        QVERIFY(!fakeFolder.currentRemoteState().find(QStringLiteral("A/a1")));
+        const auto excludedPin = fakeFolder.vfs()->pinState(QStringLiteral("A/.a1"));
+        QVERIFY(excludedPin);
+        QCOMPARE(*excludedPin, PinState::Excluded);
+
+        fakeFolder.localModifier().rename(QStringLiteral("A/.a1"), QStringLiteral("A/a1renamed"));
+        QVERIFY(fakeFolder.applyLocalModificationsAndSync());
+        QVERIFY(fakeFolder.currentRemoteState().find(QStringLiteral("A/a1renamed")));
+        const auto pin = fakeFolder.vfs()->pinState(QStringLiteral("A/a1renamed"));
+        QVERIFY(pin);
+        QVERIFY(*pin != PinState::Excluded);
     }
 
 #ifndef Q_OS_WIN

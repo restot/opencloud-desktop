@@ -17,6 +17,16 @@ HydrationJob::HydrationJob(Vfs *vfs, const QByteArray &fileId, std::unique_ptr<Q
 {
 }
 
+void HydrationJob::setTargetFile(const QString& fileName)
+{
+    _fileName = fileName;
+}
+
+QString HydrationJob::targetFileName() const
+{
+    return _fileName;
+}
+
 void HydrationJob::start()
 {
     _vfs->params().journal->getFileRecordsByFileId(_fileId, [this](const SyncJournalFileRecord &record) {
@@ -50,8 +60,11 @@ void HydrationJob::start()
                 // assume that the local and the remote metadata are out of sync
                 Q_EMIT _vfs->needSync();
             }
-        }
-        if (_job->aborted()) {
+        } else if (_job->httpStatusCode() == 404) {
+            errorMsg = tr("File not found");
+            // assume the file was renamed or deleted
+            Q_EMIT _vfs->needSync();
+        } else if (_job->aborted()) {
             errorMsg = tr("Aborted.");
         }
 

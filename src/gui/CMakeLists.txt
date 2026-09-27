@@ -37,7 +37,6 @@ target_sources(OpenCloudGui PRIVATE
 
     application.cpp
     fetchserversettings.cpp
-    clientproxy.cpp
     commonstrings.cpp
     connectionvalidator.cpp
     folder.cpp
@@ -109,8 +108,6 @@ ecm_add_qml_module(OpenCloudGui
         NAMESPACE OCC
         GENERATE_PLUGIN_SOURCE
         QML_FILES
-            qml/OpenCloud.js
-
             qml/AccountBar.qml
             qml/AccountButton.qml
             qml/FolderDelegate.qml
@@ -246,6 +243,15 @@ ecm_finalize_qml_module(OpenCloudGui DESTINATION ${KDE_INSTALL_QMLDIR})
 
 if(UNIX AND NOT APPLE)
     configure_file(${CMAKE_SOURCE_DIR}/opencloud.desktop.in
-                   ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_EXECUTABLE}.desktop)
-    install(FILES  ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_EXECUTABLE}.desktop DESTINATION ${KDE_INSTALL_DATADIR}/applications )
+                   ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_EXECUTABLE}.desktop
+                   @ONLY
+    )
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_EXECUTABLE}.desktop DESTINATION ${KDE_INSTALL_DATADIR}/applications)
+
+    configure_file(${CMAKE_SOURCE_DIR}/opencloud.metainfo.xml.in
+            ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_REV_DOMAIN}.${APPLICATION_EXECUTABLE}.metainfo.xml
+            @ONLY
+    )
+
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${APPLICATION_REV_DOMAIN}.${APPLICATION_EXECUTABLE}.metainfo.xml DESTINATION ${KDE_INSTALL_METAINFODIR})
 endif()

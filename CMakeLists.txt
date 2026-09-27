@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.18)
+
+include(VERSION.cmake)
+project(OpenCloudDesktop LANGUAGES CXX VERSION ${MIRALL_VERSION_MAJOR}.${MIRALL_VERSION_MINOR}.${MIRALL_VERSION_PATCH})
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-include(VERSION.cmake)
-project(OpenCloudDesktop LANGUAGES CXX C VERSION ${MIRALL_VERSION_MAJOR}.${MIRALL_VERSION_MINOR}.${MIRALL_VERSION_PATCH})
 include(FeatureSummary)
 
 if(APPLE)
@@ -17,7 +19,6 @@ endif()
 find_package(ECM 6.0.0 REQUIRED NO_MODULE)
 
 set_package_properties(ECM PROPERTIES TYPE REQUIRED DESCRIPTION "Extra CMake Modules." URL "https://projects.kde.org/projects/kdesupport/extra-cmake-modules")
-feature_summary(WHAT REQUIRED_PACKAGES_NOT_FOUND FATAL_ON_MISSING_REQUIRED_PACKAGES)
 
 set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules ${ECM_MODULE_PATH} ${CMAKE_MODULE_PATH})
 
@@ -26,17 +27,6 @@ set(APPLE_SUPPRESS_X11_WARNING ON)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-find_package(QT 6.8 NAMES Qt6 COMPONENTS Core REQUIRED)
-
-find_package(Qt6 COMPONENTS Core Concurrent Network Widgets Xml Quick QuickWidgets QuickControls2 REQUIRED)
-find_package(Qt6LinguistTools REQUIRED)
-get_target_property (QT_QMAKE_EXECUTABLE Qt::qmake IMPORTED_LOCATION)
-message(STATUS "Using Qt ${QT_VERSION} (${QT_QMAKE_EXECUTABLE})")
-
-if (UNIX AND NOT APPLE)
-    find_package(Qt6 REQUIRED COMPONENTS DBus)
-endif()
-
 include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(ECMMarkNonGuiExecutable)
@@ -44,10 +34,18 @@ include(ECMSetupVersion)
 
 include(KDECompilerSettings NO_POLICY_SCOPE)
 include(ECMEnableSanitizers)
-
-# while we use qt_add_qml_module instead of ecm_add_qml_module
-# include ECMQmlModule to set up the policies
 include(ECMQmlModule)
+
+find_package(Qt6 COMPONENTS Core Concurrent Network Widgets Xml Quick QuickWidgets QuickControls2 Linguist REQUIRED)
+qt6_standard_project_setup(REQUIRES 6.8)
+
+
+get_target_property (QT_QMAKE_EXECUTABLE Qt::qmake IMPORTED_LOCATION)
+message(STATUS "Using Qt ${Qt6_VERSION_MAJOR}.${Qt6_VERSION_MINOR}.${Qt6_VERSION_PATCH} (${QT_QMAKE_EXECUTABLE})")
+
+if (UNIX AND NOT APPLE)
+    find_package(Qt6 REQUIRED COMPONENTS DBus)
+endif()
 
 if(UNIT_TESTING)
     message(DEPRECATION "Setting UNIT_TESTING is deprecated please use BUILD_TESTING")
@@ -89,32 +87,52 @@ if ("${GIT_SHA1}" STREQUAL "GITDIR-NOTFOUND")
 endif()
 message(STATUS "GIT_SHA1 ${GIT_SHA1}")
 
+## -DNO_MSG_HANDLER=ON
 option(NO_MSG_HANDLER "Don't redirect QDebug outputs to the log window/file" OFF)
 
 if (APPLE)
     # this option builds the shell integration, currently only available on MacOS
+    ## -DBUILD_SHELL_INTEGRATION=OFF
     option(BUILD_SHELL_INTEGRATION "BUILD_SHELL_INTEGRATION" ON)
 endif()
 
 # build the auto updater component
+## -DWITH_AUTO_UPDATER=ON
 option(WITH_AUTO_UPDATER "WITH_AUTO_UPDATER" OFF)
+## -DWITH_UPDATE_NOTIFICATION=OFF
 option(WITH_UPDATE_NOTIFICATION "Whether to check for new releases" ON)
 
 # create a co-installable client, that uses a separate profile
+## -DBETA_CHANNEL_BUILD=ON
 option(BETA_CHANNEL_BUILD "Use a standalone profile for a beta release" OFF)
 
 # build with -DQT_FORCE_ASSERTS
+## -DFORCE_ASSERTS=ON
 option(FORCE_ASSERTS "FORCE_ASSERTS" OFF)
 
+## -DWITH_HTTP2=ON
+## For testing purposes the client behavior can also be modified with an environment variable OPENCLOUD_USE_HTTP2=[0|1]
+## Relevant bugs:
+## https://qt-project.atlassian.net/browse/QTBUG-147237
+## https://github.com/opencloud-eu/desktop/issues/940
+## https://github.com/opencloud-eu/desktop/issues/734
+option(WITH_HTTP2 "Enable the use of http2" OFF)
+add_feature_info(HTTP2Support WITH_HTTP2 "Support for http2, this is currently disabled due to known Qt bugs")
+
+## -DWITH_APPIMAGEUPDATER=ON
 option(WITH_APPIMAGEUPDATER OFF "Enable built-in libappimageupdate based updater on Linux")
 add_feature_info(AppImageUpdate WITH_APPIMAGEUPDATER "Built-in libappimageupdate based updater")
 
-option(WITH_EXTERNAL_BRANDING "A URL to an external branding repo" "")
-
 # specify additional vfs plugins
-set(VIRTUAL_FILE_SYSTEM_PLUGINS off cfapi CACHE STRING "Name of internal plugin in src/libsync/vfs or the locations of virtual file plugins")
+## Available values: off cfapi openvfs
+## off: No virtual files are used
+## cfapi: Virtual files for Windows
+## openvfs: Virtual files for Linux, currently in an experimental state
+## -DVIRTUAL_FILE_SYSTEM_PLUGINS="off;cfapi;openvfs"
+set(VIRTUAL_FILE_SYSTEM_PLUGINS off cfapi CACHE STRING "Name of internal plugin in src/plugins/vfs or the locations of virtual file plugins")
 
 if(APPLE)
+  ## -DSOCKETAPI_TEAM_IDENTIFIER_PREFIX="com.example."
   # Default SOCKETAPI_TEAM_IDENTIFIER_PREFIX from environment if present, otherwise empty.
   set(SOCKETAPI_TEAM_IDENTIFIER_PREFIX "$ENV{SOCKETAPI_TEAM_IDENTIFIER_PREFIX}" CACHE STRING "SocketApi prefix (including a following dot) that must match the codesign key's TeamIdentifier/Organizational Unit")
 endif()
@@ -159,8 +177,6 @@ if(BUILD_TESTING)
     add_subdirectory(test)
 endif()
 
-feature_summary(WHAT ALL FATAL_ON_MISSING_REQUIRED_PACKAGES)
-
 if(ECM_VERSION VERSION_GREATER_EQUAL 5.79)
     message(STATUS "Suitable ECM ${ECM_VERSION} found, installing clang-format git hook")
     include(KDEGitCommitHooks)
@@ -168,3 +184,5 @@ if(ECM_VERSION VERSION_GREATER_EQUAL 5.79)
 else()
     message(WARNING "ECM ${ECM_VERSION} too old, cannot install clang-format git hook")
 endif()
+
+feature_summary(WHAT ALL FATAL_ON_MISSING_REQUIRED_PACKAGES INCLUDE_QUIET_PACKAGES)

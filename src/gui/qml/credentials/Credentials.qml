@@ -43,6 +43,7 @@ Pane {
 
         Button {
             id: logOutButton
+            // this button is hidden when used in the wizard
             visible: credentials.isRefresh
             text: qsTr("Stay logged out")
             onClicked: credentials.logOutRequested()
@@ -52,7 +53,7 @@ Pane {
             palette.disabled.buttonText: Theme.secondaryButtonColor.textColorDisabled
 
             Keys.onTabPressed: event => {
-                if (credentials.isRefresh) {
+                if (!visible) {
                     event.accepted = false;
                 } else {
                     widget.parentFocusWidget.focusNext();
@@ -70,7 +71,7 @@ Pane {
         Image {
             Layout.alignment: Qt.AlignHCenter
             fillMode: Image.PreserveAspectFit
-            source: OpenCloud.resourcePath("universal", "wizard_logo", true)
+            source: OCUtils.resourcePath("universal", "wizard_logo", true)
             sourceSize.height: 128
             sourceSize.width: 128
         }

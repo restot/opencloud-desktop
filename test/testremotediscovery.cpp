@@ -69,15 +69,13 @@ private Q_SLOTS:
         QTest::addColumn<Vfs::Mode>("vfsMode");
         QTest::addColumn<bool>("filesAreDehydrated");
 
-        QTest::newRow("Vfs::Off") << Vfs::Off << false;
+        QTest::newRow("Vfs::Mode::Off") << Vfs::Mode::Off << false;
 
-        if (VfsPluginManager::instance().isVfsPluginAvailable(Vfs::WindowsCfApi)) {
-            QTest::newRow("Vfs::WindowsCfApi dehydrated") << Vfs::WindowsCfApi << true;
-
-            // TODO: the hydrated version will fail due to an issue in the winvfs plugin, so leave it disabled for now.
-            // QTest::newRow("Vfs::WindowsCfApi hydrated") << Vfs::WindowsCfApi << false;
+        if (VfsPluginManager::instance().isVfsPluginAvailable(Vfs::Mode::WindowsCfApi)) {
+            QTest::newRow("Vfs::Mode::WindowsCfApi dehydrated") << Vfs::Mode::WindowsCfApi << true;
+            QTest::newRow("Vfs::Mode::WindowsCfApi hydrated") << Vfs::Mode::WindowsCfApi << false;
         } else if (Utility::isWindows()) {
-            qWarning("Skipping Vfs::WindowsCfApi");
+            qWarning("Skipping Vfs::Mode::WindowsCfApi");
         }
     }
 
@@ -145,7 +143,7 @@ private Q_SLOTS:
         });
 
         // So the test that test timeout finishes fast
-        QScopedValueRollback<std::chrono::seconds> setHttpTimeout(AbstractNetworkJob::httpTimeout, errorKind == Timeout ? 1s : 10000s);
+        QScopedValueRollback<decltype(AbstractNetworkJob::httpTimeout)> setHttpTimeout(AbstractNetworkJob::httpTimeout, errorKind == Timeout ? 50ms : 10000s);
 
         ItemCompletedSpy completeSpy(fakeFolder);
         QSignalSpy errorSpy(&fakeFolder.syncEngine(), &SyncEngine::syncError);

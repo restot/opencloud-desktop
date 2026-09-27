@@ -13,21 +13,21 @@
  */
 #pragma once
 
-#include "../common/pinstate.h"
-#include "../common/result.h"
-#include "../common/syncfilestatus.h"
-#include "../common/utility.h"
-#include "assert.h"
+#include "filesystem.h"
 #include "libsync/accountfwd.h"
+#include "libsync/common/pinstate.h"
+#include "libsync/common/result.h"
+#include "libsync/common/syncfilestatus.h"
+#include "libsync/common/utility.h"
 #include "libsync/discoveryinfo.h"
 #include "libsync/opencloudsynclib.h"
+#include "libsync/path.h"
 
 #include <QObject>
 #include <QSharedPointer>
 #include <QUrl>
 #include <QVersionNumber>
 
-#include <QFuture>
 #include <filesystem>
 #include <memory>
 
@@ -37,16 +37,14 @@ class Account;
 class SyncJournalDb;
 class SyncFileItem;
 class SyncEngine;
+class HydrationJob;
+class PluginFactory;
 
 /** Collection of parameters for initializing a Vfs instance. */
 struct OPENCLOUD_SYNC_EXPORT VfsSetupParams
 {
     explicit VfsSetupParams(const AccountPtr &account, const QUrl &baseUrl, const QString &spaceId, const QString &folderDisplayName, SyncEngine *syncEngine);
-    /** The full path to the folder on the local filesystem
-     *
-     * Always ends with /.
-     */
-    QString filesystemPath;
+
     QString folderDisplayName() const;
 
     /// Account url, credentials etc for network calls
@@ -62,17 +60,22 @@ struct OPENCLOUD_SYNC_EXPORT VfsSetupParams
     QString providerDisplayName;
     QString providerName;
     QVersionNumber providerVersion;
+    QString socketPath;
 
     const QUrl &baseUrl() const { return _baseUrl; }
     const QString &spaceId() const { return _spaceId; }
 
     SyncEngine *syncEngine() const;
 
+    QString filesystemPath() const;
+    const FileSystem::Path &root() const;
+
 private:
     QUrl _baseUrl;
     SyncEngine *_syncEngine;
     QString _spaceId;
     QString _folderDisplayName;
+    FileSystem::Path _root;
 };
 
 /** Interface describing how to deal with virtual/placeholder files.
@@ -97,14 +100,12 @@ public:
      * Currently plugins and modes are one-to-one but that's not required.
      * The raw integer values are used in Qml
      */
-    enum Mode : uint8_t { Off = 0, WindowsCfApi = 1 };
+    enum class Mode : uint8_t { Off = 0, WindowsCfApi = 1, OpenVFS = 2 };
     Q_ENUM(Mode)
     enum class ConvertToPlaceholderResult : uint8_t { Ok, Locked };
     Q_ENUM(ConvertToPlaceholderResult)
 
     static Optional<Mode> modeFromString(const QString &str);
-
-    static Result<void, QString> checkAvailability(const QString &path, OCC::Vfs::Mode mode);
 
     enum class AvailabilityError : uint8_t {
         // Availability can't be retrieved due to db error
@@ -211,7 +212,7 @@ public:
      *
      * Returns a QFuture<Result> void if successful and QFuture<Result> QString if an error occurs.
      */
-    [[nodiscard]] virtual QFuture<Result<void, QString>> hydrateFile(const QByteArray &fileId, const QString &targetPath);
+    [[nodiscard]] virtual HydrationJob* hydrateFile(const QByteArray &fileId, const QString &targetPath);
 
 public Q_SLOTS:
     /** Update in-sync state based on SyncFileStatusTracker signal.
@@ -267,19 +268,24 @@ public:
 
     /// Return the best available VFS mode.
     Vfs::Mode bestAvailableVfsMode() const;
-
     /// Create a VFS instance for the mode, returns nullptr on failure.
     std::unique_ptr<Vfs> createVfsFromPlugin(Vfs::Mode mode) const;
+
+    Result<void, QString> prepare(const QString &path, const QUuid &accountUuid, Vfs::Mode mode) const;
 
     static const VfsPluginManager &instance();
 
 protected:
     VfsPluginManager() = default;
+    std::pair<QString, PluginFactory *> createVfsPluginFactory(Vfs::Mode mode) const;
+
 
 private:
+    PluginFactory *createPluginFactoryInternal(Vfs::Mode mode) const;
+
     static VfsPluginManager *_instance;
 
-    mutable QMap<Vfs::Mode, bool> _pluginCache;
+    mutable QMap<Vfs::Mode, PluginFactory *> _pluginCache;
 };
 
 template <>

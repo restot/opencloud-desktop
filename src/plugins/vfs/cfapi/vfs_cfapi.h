@@ -58,7 +58,7 @@ public:
 
     void cancelHydration(const OCC::CfApiWrapper::CallBackContext &context);
 
-    LocalInfo statTypeVirtualFile(const std::filesystem::directory_entry &path, ItemType type) override;
+    LocalInfo statTypeVirtualFile(const std::filesystem::directory_entry &entry, ItemType type) override;
 
 public Q_SLOTS:
     void fileStatusChanged(const QString &systemFileName, OCC::SyncFileStatus fileStatus) override;
@@ -78,6 +78,8 @@ class CfApiVfsPluginFactory : public QObject, public DefaultPluginFactory<VfsCfA
     Q_OBJECT
     Q_PLUGIN_METADATA(IID "eu.opencloud.PluginFactory" FILE "libsync/vfs/vfspluginmetadata.json")
     Q_INTERFACES(OCC::PluginFactory)
+public:
+    Result<void, QString> prepare(const QString &path, const QUuid &accountUuid) const override;
 };
 
 } // namespace OCC

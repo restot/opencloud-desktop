@@ -1,13 +1,14 @@
 find_package(LibreGraphAPI 1.0.4 REQUIRED)
 set_package_properties(LibreGraphAPI PROPERTIES
-        URL https://github.com/owncloud/libre-graph-api-cpp-qt-client.git
-        DESCRIPTION "Libre Graph is a free API for cloud collaboration inspired by the MS Graph API."
-        TYPE OPTIONAL
+        URL https://github.com/opencloud-eu/libre-graph-api-cpp-qt-client
+        DESCRIPTION "Libre Graph is a free API for cloud collaboration inspired by the MS Graph API"
+        TYPE REQUIRED
 )
 
 configure_file(config.h.in ${CMAKE_CURRENT_BINARY_DIR}/config.h)
 
-set(libsync_SRCS
+
+add_library(libsync SHARED
     account.cpp
     bandwidthmanager.cpp
     capabilities.cpp
@@ -45,11 +46,11 @@ set(libsync_SRCS
     syncoptions.cpp
     theme.cpp
 
-    creds/credentialmanager.cpp
     creds/abstractcredentials.cpp
+    creds/credentialmanager.cpp
+    creds/httpcredentials.cpp
     creds/oauth.cpp
     creds/jwt.cpp
-    creds/webfinger.cpp
     creds/idtoken.cpp
 
     networkjobs/getfilejob.cpp
@@ -62,19 +63,23 @@ set(libsync_SRCS
     abstractcorejob.cpp
 
     appprovider.cpp
+
+    path.cpp
 )
 
+
+set_source_files_properties(accessmanager.cpp PROPERTIES COMPILE_DEFINITIONS WITH_HTTP2=$<BOOL:${WITH_HTTP2}>)
+
 if(WIN32)
-    list(APPEND libsync_SRCS platform_win.cpp)
+    target_sources(libsync PRIVATE platform_win.cpp)
 elseif(UNIX)
+    target_sources(libsync PRIVATE xattr.cpp)
     if (APPLE)
-        list(APPEND libsync_SRCS platform_mac.mm)
+        target_sources(libsync PRIVATE platform_mac.mm)
     else()
-        list(APPEND libsync_SRCS platform_unix.cpp)
+        target_sources(libsync PRIVATE platform_unix.cpp)
     endif()
 endif()
-
-set(libsync_SRCS ${libsync_SRCS} creds/httpcredentials.cpp)
 
 # These headers are installed for libopencloudsync to be used by 3rd party apps
 INSTALL(
@@ -85,7 +90,6 @@ INSTALL(
     DESTINATION ${KDE_INSTALL_INCLUDEDIR}/${APPLICATION_SHORTNAME}/libsync
 )
 
-add_library(libsync SHARED ${libsync_SRCS})
 set_target_properties(libsync PROPERTIES EXPORT_NAME SyncCore)
 
 target_link_libraries(libsync

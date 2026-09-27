@@ -19,7 +19,6 @@
 #include "account.h"
 #include "accountstate.h"
 #include "application.h"
-#include "common/depreaction.h"
 #include "common/filesystembase.h"
 #include "common/syncjournalfilerecord.h"
 #include "common/version.h"
@@ -39,6 +38,7 @@
 #include "syncresult.h"
 #include "syncrunfilelog.h"
 #include "theme.h"
+#include "guiutility.h"
 
 #ifdef Q_OS_WIN
 #include "common/utility_win.h"
@@ -107,9 +107,7 @@ Folder::Folder(const FolderDefinition &definition, const AccountStatePtr &accoun
         connect(_engine.data(), &SyncEngine::seenLockedFile, FolderMan::instance(), &FolderMan::slotSyncOnceFileUnlocks);
         connect(_engine.data(), &SyncEngine::syncError, this, &Folder::slotSyncError);
 
-        connect(ProgressDispatcher::instance(), &ProgressDispatcher::folderConflicts,
-            this, &Folder::slotFolderConflicts);
-        connect(_engine.data(), &SyncEngine::excluded, this, [this](const QString &path) { Q_EMIT ProgressDispatcher::instance()->excluded(this, path); });
+        connect(ProgressDispatcher::instance(), &ProgressDispatcher::folderConflicts, this, &Folder::slotFolderConflicts);
 
         _localDiscoveryTracker.reset(new LocalDiscoveryTracker);
         connect(_engine.data(), &SyncEngine::finished,
@@ -124,8 +122,6 @@ Folder::Folder(const FolderDefinition &definition, const AccountStatePtr &accoun
             }
         });
 
-        // Potentially upgrade suffix vfs to windows vfs
-        OC_ENFORCE(_vfs);
         // Initialize the vfs plugin. Do this after the UI is running, so we can show a dialog when something goes wrong.
         QTimer::singleShot(0, this, &Folder::startVfs);
     }
@@ -186,7 +182,10 @@ bool Folder::checkLocalPath()
                 error = pathLengthCheck.error();
             }
 
-            if (error.isEmpty()) {
+            const auto result = VfsPluginManager::instance().prepare(path(), _accountState->account()->uuid(), _vfs->mode());
+            if (!result) {
+                error = result.error();
+            } else if (error.isEmpty()) {
                 qCDebug(lcFolder) << u"Checked local path ok";
                 if (!_journal.open()) {
                     error = tr("Failed to open the database for »%1«.").arg(_definition.localPath());
@@ -518,19 +517,12 @@ void Folder::startVfs()
     OC_ENFORCE(_vfs);
     OC_ENFORCE(_vfs->mode() == _definition.virtualFilesMode);
 
-    const auto result = Vfs::checkAvailability(path(), _vfs->mode());
-    if (!result) {
-        _syncResult.appendErrorString(result.error());
-        setSyncState(SyncResult::SetupError);
-        return;
-    }
-
     VfsSetupParams vfsParams(_accountState->account(), webDavUrl(), _definition.spaceId(), displayName(), _engine.get());
-    vfsParams.filesystemPath = path();
     vfsParams.journal = &_journal;
     vfsParams.providerDisplayName = Theme::instance()->appNameGUI();
     vfsParams.providerName = Theme::instance()->appName();
     vfsParams.providerVersion = Version::version();
+    vfsParams.socketPath = Utility::socketApiSocketPath();
 
     connect(&_engine->syncFileStatusTracker(), &SyncFileStatusTracker::fileStatusChanged,
         _vfs.data(), &Vfs::fileStatusChanged);
@@ -544,7 +536,7 @@ void Folder::startVfs()
         _vfs->fileStatusChanged(stateDbFile + QStringLiteral("-shm"), SyncFileStatus::StatusExcluded);
         _engine->setSyncOptions(loadSyncOptions());
 
-        if (_vfs->mode() == Vfs::WindowsCfApi) {
+        if (_vfs->mode() != Vfs::Mode::Off) {
             // diable ignorelist with vfs
             _engine->journal()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncBlackList, {});
         }
@@ -668,10 +660,10 @@ void Folder::slotWatchedPathsChanged(const QSet<QString> &paths, ChangeReason re
 void Folder::setVirtualFilesEnabled(bool enabled)
 {
     Vfs::Mode newMode = _definition.virtualFilesMode;
-    if (enabled && _definition.virtualFilesMode == Vfs::Off) {
+    if (enabled && _definition.virtualFilesMode == Vfs::Mode::Off) {
         newMode = VfsPluginManager::instance().bestAvailableVfsMode();
-    } else if (!enabled && _definition.virtualFilesMode != Vfs::Off) {
-        newMode = Vfs::Off;
+    } else if (!enabled && _definition.virtualFilesMode != Vfs::Mode::Off) {
+        newMode = Vfs::Mode::Off;
     }
 
     if (newMode != _definition.virtualFilesMode) {
@@ -1113,7 +1105,7 @@ void Folder::registerFolderWatcher()
 
 bool Folder::virtualFilesEnabled() const
 {
-    return _definition.virtualFilesMode != Vfs::Off;
+    return _definition.virtualFilesMode != Vfs::Mode::Off;
 }
 
 } // namespace OCC

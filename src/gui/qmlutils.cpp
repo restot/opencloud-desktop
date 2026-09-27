@@ -14,15 +14,16 @@
 
 #include "gui/qmlutils.h"
 
-#include "common/asserts.h"
 #include "gui/fonticonmessagebox.h"
+#include "gui/openfilemanager.h"
 #include "resources/resources.h"
 
 #include <QMessageBox>
 #include <QQmlContext>
 #include <QQuickItem>
 #include <QQuickWidget>
-#include <QTimer>
+
+using namespace Qt::Literals::StringLiterals;
 
 void OCC::QmlUtils::OCQuickWidget::setOCContext(const QUrl &src, QWidget *parentFocusWidget, QObject *ocContext, QJSEngine::ObjectOwnership ownership)
 {
@@ -87,6 +88,29 @@ bool OCC::QmlUtils::OCQuickWidget::event(QEvent *event)
 QString OCC::QmlUtils::OCUtils::qVersion() const
 {
     return QString::fromUtf8(::qVersion());
+}
+
+QUrl OCC::QmlUtils::OCUtils::resourcePath(const QString &theme, const QString &icon, bool enabled, int size, const QColor &color)
+{
+    return resourcePath2(u"opencloud"_s, theme, icon, enabled, size, color);
+}
+
+QUrl OCC::QmlUtils::OCUtils::resourcePath2(const QString &provider, const QString &theme, const QString &icon, bool enabled, int size, const QColor &color)
+{
+    auto url = QUrl(u"image://%1"_s.arg(provider));
+    url.setQuery({{u"theme"_s, theme}, {u"icon"_s, QString::fromUtf8(QUrl::toPercentEncoding(icon))}, {u"enabled"_s, enabled ? u"true"_s : u"false"_s},
+        {u"size"_s, QString::number(size)}, {u"color"_s, color.isValid() ? color.name(QColor::HexRgb) : QString()}});
+    return url;
+}
+
+QUrl OCC::QmlUtils::OCUtils::avatarPath(const QString &accountID, bool enabled, int size)
+{
+    return resourcePath2(u"avatar"_s, {}, accountID, enabled, size, {});
+}
+
+void OCC::QmlUtils::OCUtils::showInFileManager(const QString &path)
+{
+    OCC::showInFileManager(path);
 }
 
 int OCC::QmlUtils::OCUtils::compareQVersion(int major, int minor, int patch) const
