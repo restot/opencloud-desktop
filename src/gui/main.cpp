@@ -484,7 +484,11 @@ int main(int argc, char **argv)
         if (options.clearFileProviderDomains) {
             qCInfo(lcMain) << "Clearing all FileProvider domains...";
             OCC::Mac::FileProviderDomainManager domainManager;
-            domainManager.removeAllDomains(true); // Wait for completion
+            const auto result = domainManager.removeAllDomains();
+            if (!result) {
+                qCCritical(lcMain) << "Could not clear FileProvider domains:" << result.error();
+                return 1;
+            }
             qCInfo(lcMain) << "FileProvider domains cleared.";
             return 0;
         }

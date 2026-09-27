@@ -21,6 +21,10 @@
 #include "gui/networkinformation.h"
 #include "libsync/theme.h"
 
+#ifdef Q_OS_MAC
+#include "macOS/fileprovider.h"
+#endif
+
 #include <QApplication>
 #include <QDesktopServices>
 #include <QMenu>
@@ -43,6 +47,11 @@ Systray::Systray(QObject *parent)
         [this](AccountStatePtr accountState) { connect(accountState.data(), &AccountState::stateChanged, this, &Systray::slotComputeOverallSyncStatus); });
     connect(FolderMan::instance(), &FolderMan::folderSyncStateChange, this, &Systray::slotComputeOverallSyncStatus);
 
+#ifdef Q_OS_MAC
+    if (FolderMan::instance()->useFileProvider()) {
+        connect(Mac::FileProvider::instance(), &Mac::FileProvider::statusChanged, this, &Systray::slotComputeOverallSyncStatus);
+    }
+#endif
     // init systray
     slotComputeOverallSyncStatus();
     computeContextMenu();
@@ -111,8 +120,20 @@ void Systray::slotComputeOverallSyncStatus()
         setToolTip(tr("Please sign in"));
         return;
     } else if (FolderMan::instance()->useFileProvider()) {
-        setIcon(getIconFromStatus(SyncResult::Success));
-        setToolTip(tr("On-demand files in Finder"));
+#ifdef Q_OS_MAC
+        const auto provider = Mac::FileProvider::instance();
+        const auto error = provider->error();
+        if (!error.isEmpty()) {
+            setIcon(getIconFromStatus(SyncResult::Error));
+            setToolTip(tr("On-demand files need attention: %1").arg(error));
+        } else if (!provider->ready()) {
+            setIcon(getIconFromStatus(SyncResult::SyncRunning));
+            setToolTip(tr("Connecting on-demand files…"));
+        } else {
+            setIcon(getIconFromStatus(SyncResult::Success));
+            setToolTip(tr("On-demand files in Finder"));
+        }
+#endif
         return;
     } else if (allPaused) {
         setIcon(getIconFromStatus(SyncResult::Paused));

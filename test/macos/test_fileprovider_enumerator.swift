@@ -2,19 +2,23 @@ import Foundation
 import FileProvider
 
 // Transport and extension doubles keep these tests independent of Finder and credentials.
-enum WebDAVError: Error {
-    case notAuthenticated, fileNotFound, permissionDenied, serverError
-}
 actor WebDAVClient {
     var listings: [String: [WebDAVItem]] = [:]
     var fail = false
     var failure: WebDAVError?
+    var delay: UInt64 = 0
+    var requests = 0
+    func delayRequests(_ nanoseconds: UInt64) { delay = nanoseconds }
+    func requestCount() -> Int { requests }
     func configure(_ listings: [String: [WebDAVItem]], fail: Bool = false, failure: WebDAVError? = nil) {
         self.listings = listings
         self.fail = fail
         self.failure = failure
     }
-    func listDirectory(path: String) throws -> [WebDAVItem] {
+    func isRootPath(_ path: String) -> Bool { path == "/" }
+    func listDirectory(path: String) async throws -> [WebDAVItem] {
+        requests += 1
+        if delay > 0 { try await Task.sleep(nanoseconds: delay) }
         if let failure = failure { throw failure }
         if fail { throw WebDAVError.serverError }
         guard let listing = listings[path] else { throw WebDAVError.fileNotFound }
@@ -33,14 +37,27 @@ final class ChangeObserver: NSObject, NSFileProviderChangeObserver {
     var deleted: [NSFileProviderItemIdentifier] = []
     var anchor: NSFileProviderSyncAnchor?
     var error: Error?
+    var moreComing = false
     let completion: () -> Void
     init(completion: @escaping () -> Void) { self.completion = completion }
     func didUpdate(_ updatedItems: [NSFileProviderItem]) { updated += updatedItems }
     func didDeleteItems(withIdentifiers deletedItemIdentifiers: [NSFileProviderItemIdentifier]) { deleted += deletedItemIdentifiers }
     func finishEnumeratingChanges(upTo syncAnchor: NSFileProviderSyncAnchor, moreComing: Bool) {
         anchor = syncAnchor
+        self.moreComing = moreComing
         completion()
     }
+    func finishEnumeratingWithError(_ error: Error) { self.error = error; completion() }
+}
+
+final class EnumerationObserver: NSObject, NSFileProviderEnumerationObserver {
+    var items: [NSFileProviderItem] = []
+    var next: NSFileProviderPage?
+    var error: Error?
+    let completion: () -> Void
+    init(completion: @escaping () -> Void) { self.completion = completion }
+    func didEnumerate(_ updatedItems: [NSFileProviderItem]) { items += updatedItems }
+    func finishEnumerating(upTo nextPage: NSFileProviderPage?) { next = nextPage; completion() }
     func finishEnumeratingWithError(_ error: Error) { self.error = error; completion() }
 }
 
@@ -56,6 +73,14 @@ struct EnumeratorTests {
         await withCheckedContinuation { continuation in
             observer = ChangeObserver { continuation.resume() }
             enumerator.enumerateChanges(for: observer, from: NSFileProviderSyncAnchor(anchor))
+        }
+        return observer
+    }
+    static func items(_ enumerator: FileProviderEnumerator, page: NSFileProviderPage) async -> EnumerationObserver {
+        var observer: EnumerationObserver!
+        await withCheckedContinuation { continuation in
+            observer = EnumerationObserver { continuation.resume() }
+            enumerator.enumerateItems(for: observer, startingAt: page)
         }
         return observer
     }
@@ -113,7 +138,8 @@ struct EnumeratorTests {
         try await database.setDownloaded(ocId: "nested", downloaded: true)
         let moveAnchor = try await database.currentSyncAnchor()
         let moved = remote("moving", path: "/b/moving", directory: true)
-        await server.configure(["/": [root, a, b], "/a": [a], "/b": [b, moved]])
+        await server.configure(["/": [root, a, b], "/a": [a], "/b": [b, moved],
+                                "/b/moving": [moved, remote("nested", path: "/b/moving/nested")]])
         let movedChanges = await changes(enumerator, since: moveAnchor)
         precondition(movedChanges.error == nil)
         precondition(!movedChanges.deleted.map(\.rawValue).contains("moving"), "A cross-parent move must not become a deletion")
@@ -129,6 +155,89 @@ struct EnumeratorTests {
         let preservedAgain = await database.itemMetadata(ocId: "nested")
         precondition(preservedAgain?.remotePath == "/a/moving/nested" && preservedAgain?.isDownloaded == true,
                      "Source-folder enumeration must preserve moved descendants")
+        // Persistent path identities survive local moves and metadata-cache loss.
+        let idlessFolder = remote(WebDAVItem.generateIdentifier(from: "/idless"), path: "/idless", directory: true)
+        let idlessChild = remote(WebDAVItem.generateIdentifier(from: "/idless/child"), path: "/idless/child")
+        var identityDB: ItemDatabase? = try ItemDatabase(containerURL: container, domainIdentifier: "identity")
+        let folderIdentity = try await identityDB!.mergeServerMetadata(ItemMetadata(from: idlessFolder, parentOcId: ItemDatabase.rootContainerId))
+        let childIdentity = try await identityDB!.mergeServerMetadata(ItemMetadata(from: idlessChild, parentOcId: folderIdentity.ocId))
+        precondition(folderIdentity.ocId.hasPrefix("local:") && childIdentity.ocId.hasPrefix("local:"))
+        let movedFolder = remote(WebDAVItem.generateIdentifier(from: "/renamed"), path: "/renamed", directory: true)
+        let movedChild = remote(WebDAVItem.generateIdentifier(from: "/renamed/child"), path: "/renamed/child")
+        let movedIdentity = try await identityDB!.mergeServerMetadata(ItemMetadata(from: movedFolder, parentOcId: ItemDatabase.rootContainerId), preservingIdentifier: folderIdentity.ocId)
+        precondition(movedIdentity.ocId == folderIdentity.ocId)
+        let childAtNewPath = try await identityDB!.mergeServerMetadata(ItemMetadata(from: movedChild, parentOcId: folderIdentity.ocId))
+        precondition(childAtNewPath.ocId == childIdentity.ocId, "Directory moves must preserve descendant IDs")
+        identityDB = nil
+        try FileManager.default.removeItem(at: container.appendingPathComponent("FileProvider/items-identity.sqlite"))
+        let recoveredDB = try ItemDatabase(containerURL: container, domainIdentifier: "identity")
+        await server.configure(["/": [root, movedFolder], "/renamed": [movedFolder, movedChild], "/renamed/child": [movedChild]])
+        let recovered = try await recoveredDB.resolveItem(identifier: childIdentity.ocId, webdav: server)
+        precondition(recovered?.ocId == childIdentity.ocId && recovered?.parentOcId == folderIdentity.ocId,
+                     "Sidecar recovery must preserve nested identity and reconstruct parents")
+        try await recoveredDB.deleteItemMetadata(ocId: childIdentity.ocId)
+        let replacement = try await recoveredDB.mergeServerMetadata(ItemMetadata(from: movedChild, parentOcId: folderIdentity.ocId))
+        precondition(replacement.ocId != childIdentity.ocId, "Observed deletion must retire identity before path reuse")
+        let unmatched = try await recoveredDB.resolveItem(identifier: "local:missing", webdav: server)
+        precondition(unmatched == nil, "Unrelated id-less resources must never match by etag")
+        let cold = try ItemDatabase(containerURL: container, domainIdentifier: "cold")
+        await server.configure(["/": [root, a], "/a": [a, remote("server-id", path: "/a/file")]])
+        let restored = try await cold.resolveItem(identifier: "server-id", webdav: server)
+        precondition(restored?.ocId == "server-id" && restored?.parentOcId == "a",
+                     "Unknown server IDs must be rediscovered with their actual parents")
+
+        let largeDB = try ItemDatabase(containerURL: container, domainIdentifier: "large-enum")
+        let largeExtension = FileProviderExtension()
+        largeExtension.database = largeDB
+        largeExtension.webdavClient = server
+        let largeEnumerator = FileProviderEnumerator(enumeratedItemIdentifier: .rootContainer, domain: domain, fpExtension: largeExtension)
+        let initialLargeAnchor = try await largeDB.currentSyncAnchor()
+        let many = (0..<1203).map { remote("large-\($0)", path: "/large-\($0)") }
+        await server.configure(["/": [root] + many])
+        var page = NSFileProviderPage(NSFileProviderPage.initialPageSortedByName as Data)
+        var itemIDs = Set<String>()
+        var pageCount = 0
+        let beforeRequests = await server.requestCount()
+        while true {
+            let batch = await items(largeEnumerator, page: page)
+            precondition(batch.error == nil && batch.items.count <= 500)
+            itemIDs.formUnion(batch.items.map { $0.itemIdentifier.rawValue })
+            pageCount += 1
+            guard let next = batch.next else { break }
+            page = next
+        }
+        let afterRequests = await server.requestCount()
+        precondition(itemIDs.count == 1203 && pageCount == 3 && afterRequests - beforeRequests == 1,
+                     "Continuation pages must not repeat the network refresh")
+        var largeChangeAnchor = initialLargeAnchor
+        var changedIDs = Set<String>()
+        var changePageCount = 0
+        while true {
+            let batch = await changes(largeEnumerator, since: largeChangeAnchor)
+            precondition(batch.error == nil && batch.updated.count + batch.deleted.count <= 500)
+            changedIDs.formUnion(batch.updated.map { $0.itemIdentifier.rawValue })
+            largeChangeAnchor = batch.anchor!.rawValue
+            changePageCount += 1
+            if !batch.moreComing { break }
+        }
+        precondition(changedIDs.count == 1203 && changePageCount == 3,
+                     "Change observers must receive all changes through bounded pages")
+        let badPage = await items(largeEnumerator, page: NSFileProviderPage(Data("invalid".utf8)))
+        precondition((badPage.error as NSError?)?.code == NSFileProviderError.pageExpired.rawValue)
+        let cancelEnumerator = FileProviderEnumerator(enumeratedItemIdentifier: .rootContainer, domain: domain, fpExtension: largeExtension)
+        await server.delayRequests(10_000_000_000)
+        let pending = Task { await items(cancelEnumerator, page: NSFileProviderPage(NSFileProviderPage.initialPageSortedByName as Data)) }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        cancelEnumerator.invalidate()
+        let cancelled = await pending.value
+        precondition((cancelled.error as NSError?)?.code == CocoaError.userCancelled.rawValue && cancelled.items.isEmpty,
+                     "Invalidation must cancel network enumeration without publishing partial items")
+        await server.delayRequests(0)
+        largeExtension.isAuthenticated = false
+        let unauthenticatedEnumerator = FileProviderEnumerator(enumeratedItemIdentifier: .rootContainer, domain: domain, fpExtension: largeExtension)
+        let authFailure = await items(unauthenticatedEnumerator, page: NSFileProviderPage(NSFileProviderPage.initialPageSortedByName as Data))
+        precondition((authFailure.error as NSError?)?.code == NSFileProviderError.notAuthenticated.rawValue,
+                     "Missing authentication must fail immediately instead of polling")
         print("FileProvider enumerator regression tests passed")
     }
 }

@@ -13,6 +13,103 @@
  */
 
 import Foundation
+import FileProvider
+import CryptoKit
+
+/// SHA256 helper for file content comparison
+extension SHA256 {
+    /// Compute SHA256 of a file's contents, returning raw digest bytes
+    static func hash(contentsOf url: URL) -> Data? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        do {
+            while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+                hasher.update(data: chunk)
+            }
+            return Data(hasher.finalize())
+        } catch {
+            return nil
+        }
+    }
+}
+
+/// Error types for WebDAV operations
+enum WebDAVError: Error, LocalizedError {
+    case invalidURL
+    case notAuthenticated
+    case httpError(statusCode: Int, message: String?)
+    case networkError(Error)
+    case parseError(String)
+    case fileNotFound
+    case permissionDenied
+    case serverError
+    case cancelled
+    case conflict
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL:
+            return "Invalid server URL"
+        case .notAuthenticated:
+            return "Not authenticated"
+        case .httpError(let code, let message):
+            return "HTTP error \(code): \(message ?? "Unknown")"
+        case .networkError(let error):
+            return "Network error: \(error.localizedDescription)"
+        case .parseError(let reason):
+            return "Parse error: \(reason)"
+        case .fileNotFound:
+            return "File not found"
+        case .permissionDenied:
+            return "Permission denied"
+        case .serverError:
+            return "Server error"
+        case .cancelled:
+            return "Operation cancelled"
+        case .conflict:
+            return "Conflict: server version changed"
+        }
+    }
+}
+
+extension WebDAVError {
+    func fileProviderError(isWrite: Bool = false, itemIdentifier: NSFileProviderItemIdentifier? = nil) -> Error {
+        switch self {
+        case .notAuthenticated:
+            return NSFileProviderError(.notAuthenticated)
+        case .permissionDenied:
+            return CocoaError(isWrite ? .fileWriteNoPermission : .fileReadNoPermission)
+        case .fileNotFound:
+            if let identifier = itemIdentifier {
+                return NSError.fileProviderErrorForNonExistentItem(withIdentifier: identifier)
+            }
+            return NSFileProviderError(.noSuchItem)
+        case .httpError(statusCode: 507, message: _):
+            return NSFileProviderError(.insufficientQuota)
+        case .networkError, .serverError:
+            return NSFileProviderError(.serverUnreachable)
+        case .cancelled:
+            return CocoaError(.userCancelled)
+        default:
+            return NSFileProviderError(.cannotSynchronize)
+        }
+    }
+}
+
+/// Keep native FileProvider/Cocoa errors intact and classify transport failures once.
+func fileProviderError(_ error: Error, isWrite: Bool = false, itemIdentifier: NSFileProviderItemIdentifier? = nil) -> Error {
+    if let error = error as? WebDAVError {
+        return error.fileProviderError(isWrite: isWrite, itemIdentifier: itemIdentifier)
+    }
+    if error is CancellationError || (error as? URLError)?.code == .cancelled {
+        return CocoaError(.userCancelled)
+    }
+    if error is URLError { return NSFileProviderError(.serverUnreachable) }
+    let native = error as NSError
+    if native.domain == NSFileProviderErrorDomain || native.domain == NSCocoaErrorDomain { return error }
+    return NSFileProviderError(.cannotSynchronize)
+}
 
 /// Represents a parsed item from WebDAV PROPFIND response.
 /// Models the key properties returned by OpenCloud/ownCloud/Nextcloud servers.
@@ -78,6 +175,15 @@ struct WebDAVItem: Sendable {
         return normalizedPath
     }
     
+    static func path(fromIdentifier identifier: String) -> String? {
+        let token = identifier.hasPrefix("path:") ? String(identifier.dropFirst(5)) : identifier
+        let base64 = token.replacingOccurrences(of: "_", with: "/").replacingOccurrences(of: "-", with: "+")
+        let padded = base64 + String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        guard let data = Data(base64Encoded: padded), let path = String(data: data, encoding: .utf8),
+              path.hasPrefix("/") else { return nil }
+        return path
+    }
+
     /// Generate a fallback identifier from path if server doesn't provide ocId
     static func generateIdentifier(from remotePath: String) -> String {
         let normalizedPath = remotePath.hasSuffix("/") ? String(remotePath.dropLast()) : remotePath
@@ -85,7 +191,7 @@ struct WebDAVItem: Sendable {
         // Use simple base64 encoding of path for fallback
         // In production, server should always provide ocId
         if let data = normalizedPath.data(using: .utf8) {
-            return data.base64EncodedString()
+            return "path:" + data.base64EncodedString()
                 .replacingOccurrences(of: "/", with: "_")
                 .replacingOccurrences(of: "+", with: "-")
                 .replacingOccurrences(of: "=", with: "")

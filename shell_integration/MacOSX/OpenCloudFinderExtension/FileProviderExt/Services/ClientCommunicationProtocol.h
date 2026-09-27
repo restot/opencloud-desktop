@@ -50,6 +50,16 @@
                          davPath:(NSString *)davPath
                         authType:(NSString *)authType;
 
+/** Configure and acknowledge validation/persistence errors to the host. */
+- (void)configureAccountWithUser:(NSString *)user
+                         userId:(NSString *)userId
+                      serverUrl:(NSString *)serverUrl
+                       password:(NSString *)password
+                        davPath:(NSString *)davPath
+                       authType:(NSString *)authType
+                     generation:(NSString *)generation
+              completionHandler:(void (^)(NSError *error))completionHandler;
+
 /**
  * Remove account configuration (e.g., on sign out).
  */
@@ -57,6 +67,7 @@
 
 /** Acknowledge only after persisted credentials and domain state are cleared. */
 - (void)removeAccountConfigWithCompletionHandler:(void (^)(NSError *error))completionHandler;
+- (void)removeAccountConfigWithGeneration:(NSString *)generation completionHandler:(void (^)(NSError *error))completionHandler;
 
 @end
 

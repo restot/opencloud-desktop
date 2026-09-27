@@ -16,14 +16,19 @@
 
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <memory>
 
 #include "gui/accountstate.h"
+#include "libsync/common/result.h"
 #include "opencloudguilib.h"
 
 namespace OCC {
 
 class Account;
+namespace GraphApi {
+    class Space;
+}
 
 namespace Mac {
 
@@ -55,12 +60,13 @@ namespace Mac {
          * @brief Remove all FileProvider domains (for cleanup).
          * @param waitForCompletion If true, block until all domains are removed.
          */
-        void removeAllDomains(bool waitForCompletion = false);
+        Result<void, QString> removeAllDomains();
 
         /**
          * @brief Get the account state for a given domain identifier.
          */
         static AccountStatePtr accountStateFromDomainIdentifier(const QString &domainIdentifier);
+        static GraphApi::Space *spaceFromDomainIdentifier(const QString &domainIdentifier);
 
         /**
          * @brief Get the domain identifier for a given account.
@@ -74,6 +80,9 @@ namespace Mac {
 
     Q_SIGNALS:
         void domainSetupComplete();
+        void domainRegistered(const QString &domainIdentifier);
+        void domainRemoved(const QString &domainIdentifier);
+        void nativeError(const QString &domainIdentifier, const QString &error);
 
     public Q_SLOTS:
         void addFileProviderDomainForAccount(const AccountState *accountState);
@@ -86,6 +95,8 @@ namespace Mac {
 
     private:
         void clearAccountConfiguration(const QString &domainIdentifier, bool removeDomain);
+        void reconcileSpaces(const AccountState *accountState);
+        QSet<QString> _watchedAccounts;
         QPointer<FileProviderXPC> _xpc;
         class MacImplementation;
         std::unique_ptr<MacImplementation> d;

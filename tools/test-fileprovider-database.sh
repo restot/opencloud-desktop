@@ -8,6 +8,8 @@ xcrun swiftc -parse-as-library \
   "$sources/WebDAV/WebDAVItem.swift" \
   "$sources/Database/ItemMetadata.swift" \
   "$sources/Database/ItemDatabase.swift" \
+  "$sources/WebDAV/WebDAVClient.swift" \
+  "$sources/WebDAV/WebDAVXMLParser.swift" \
   "$repo_root/test/macos/test_fileprovider_database.swift" \
   -o "$test_dir/test-fileprovider-database"
 "$test_dir/test-fileprovider-database"

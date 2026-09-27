@@ -1,5 +1,15 @@
 include(opencloud_add_test.cmake)
 
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME testcrashserver COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+        -s "${CMAKE_CURRENT_SOURCE_DIR}" -p test_crash_server.py)
+    if(APPLE)
+        add_test(NAME testmacosbundle COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}" -p test_macos_bundle.py)
+    endif()
+endif()
+
 add_subdirectory(manual/icon_viewer)
 add_subdirectory(testutils)
 
@@ -50,6 +60,13 @@ opencloud_add_test(LongPath)
 
 opencloud_add_test(FolderMan)
 opencloud_add_test(SyncProviderSelection)
+if(APPLE)
+    set_source_files_properties(testfileproviderlifecycle.cpp PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++ -fobjc-arc")
+    opencloud_add_test(FileProviderLifecycle)
+    target_include_directories(testfileproviderlifecycle PRIVATE "${PROJECT_SOURCE_DIR}/shell_integration/MacOSX/OpenCloudFinderExtension/FileProviderExt/Services")
+    target_link_libraries(testfileproviderlifecycle "-framework FileProvider" "-framework Foundation")
+endif()
+
 
 if(APPLE)
     opencloud_add_test(MacSocketApi)

@@ -39,6 +39,15 @@ struct DatabaseTests {
         require(localChange.updated.first?.isDownloaded == true, "Local state changes belong in working-set deltas")
         let merged = try await database.mergeServerMetadata(metadata("file", etag: "v2", size: 0))
         require(merged.isDownloaded && merged.size == 0, "Preserve local state and accept remote truncation to zero")
+        try await database.setStatus(ocId: "file", status: .downloading)
+        try await database.finishDownload(ocId: "file", matchingETag: "v1", size: 100)
+        require(await database.itemMetadata(ocId: "file")?.size == 0, "Older GET completion must not corrupt newer remote size")
+        try await database.finishDownload(ocId: "file", matchingETag: "v2", size: 0)
+        require(await database.itemMetadata(ocId: "file")?.status == .normal, "Matching GET completion must clear download status")
+        try await database.setStatus(ocId: "file", status: .uploading)
+        try await database.finishDownload(ocId: "file", matchingETag: "v2", size: 0)
+        require(await database.itemMetadata(ocId: "file")?.isUploading == true, "Download completion must preserve concurrent upload state")
+        try await database.setStatus(ocId: "file", status: .normal)
         // A stale response cannot overwrite or delete a newer local operation.
         let stale = merged
         let started = Date.distantPast
@@ -99,6 +108,48 @@ struct DatabaseTests {
         try await migrated.deleteItemMetadata(ocId: "preserved")
         let migratedDelete = try await migrated.changes(since: migratedAnchor, parentOcId: nil)
         require(migratedDelete.deleted == ["preserved"], "Migration must install working delete journal")
+        let retained = try ItemDatabase(containerURL: container, domainIdentifier: "retention", changeRetentionLimit: 20)
+        let prunedAnchor = try await retained.currentSyncAnchor()
+        for index in 0..<60 { try await retained.addItemMetadata(metadata("entry-\(index)")) }
+        do {
+            _ = try await retained.changes(since: prunedAnchor, parentOcId: nil)
+            preconditionFailure("Pruned history must expire its old anchor")
+        } catch DatabaseError.expiredAnchor {}
+        let recentAnchor = try await retained.currentSyncAnchor()
+        for index in 60..<70 { try await retained.addItemMetadata(metadata("entry-\(index)")) }
+        var changeCursor = recentAnchor
+        var changed = Set<String>()
+        var more = true
+        while more {
+            let page = try await retained.changes(since: changeCursor, parentOcId: nil, limit: 3)
+            require(page.updated.count + page.deleted.count <= 3, "Change pages must stay bounded")
+            changed.formUnion(page.updated.map(\.ocId))
+            changeCursor = page.anchor
+            more = page.moreComing
+        }
+        require(changed.count == 10, "Paged change delivery must not lose identifiers")
+        require(changeCursor == (try await retained.currentSyncAnchor()), "Final page must reach current anchor")
+        var retentionHandle: OpaquePointer?
+        require(sqlite3_open(container.appendingPathComponent("FileProvider/items-retention.sqlite").path, &retentionHandle) == SQLITE_OK, "Open retention inspection")
+        var statement: OpaquePointer?
+        require(sqlite3_prepare_v2(retentionHandle, "SELECT COUNT(*) FROM item_changes", -1, &statement, nil) == SQLITE_OK, "Inspect bounded journal")
+        require(sqlite3_step(statement) == SQLITE_ROW && sqlite3_column_int(statement, 0) <= 21, "Journal must stay within retention plus pruning batch")
+        sqlite3_finalize(statement)
+        sqlite3_close(retentionHandle)
+
+        let large = try ItemDatabase(containerURL: container, domainIdentifier: "large")
+        for index in 0..<1203 { try await large.addItemMetadata(metadata("item-\(index)")) }
+        var cursor: String?
+        var pagedIDs = Set<String>()
+        var pages = 0
+        repeat {
+            let page = try await large.itemsPage(parentOcId: nil, after: cursor, limit: 500)
+            require(page.items.count <= 500, "Item pages must stay bounded")
+            pagedIDs.formUnion(page.items.map(\.ocId))
+            cursor = page.next
+            pages += 1
+        } while cursor != nil
+        require(pages == 3 && pagedIDs.count == 1203, "Large item enumeration must deliver every item once")
         print("FileProvider database regression tests passed")
     }
 }

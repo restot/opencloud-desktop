@@ -1,4 +1,19 @@
 if(APPLE)
+# Standalone Xcode builds also need a nonempty version for extension discovery.
+# Keep their defaults in step with VERSION.cmake; CMake builds override both
+# values below to include the same optional build suffix as the containing app.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/OpenCloudFinderExtension/OpenCloudFinderExtension.xcodeproj/project.pbxproj"
+    OC_XCODE_VERSION_SETTINGS REGEX "MARKETING_VERSION = [0-9.]+;")
+foreach(OC_XCODE_VERSION_SETTING IN LISTS OC_XCODE_VERSION_SETTINGS)
+    string(REGEX REPLACE ".*MARKETING_VERSION = ([0-9.]+);.*" "\\1" OC_XCODE_VERSION "${OC_XCODE_VERSION_SETTING}")
+    if(NOT OC_XCODE_VERSION STREQUAL MIRALL_VERSION)
+        message(FATAL_ERROR "Update the extension project's MARKETING_VERSION to ${MIRALL_VERSION} from VERSION.cmake")
+    endif()
+endforeach()
+if(NOT OC_XCODE_VERSION_SETTINGS)
+    message(FATAL_ERROR "The extension project must define a standalone MARKETING_VERSION")
+endif()
+
 set(OC_OEM_SHARE_ICNS "${CMAKE_BINARY_DIR}/src/gui/${APPLICATION_ICON_NAME}.icns")
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -20,7 +35,8 @@ add_custom_target( mac_overlayplugin ALL
         "OC_APPLICATION_NAME=${APPLICATION_NAME}"
         "OC_APPLICATION_REV_DOMAIN=${APPLICATION_REV_DOMAIN}"
         "OC_SOCKETAPI_TEAM_IDENTIFIER_PREFIX=${SOCKETAPI_TEAM_IDENTIFIER_PREFIX}"
-        "OC_APPLICATION_VERSION=${MIRALL_VERSION}"
+        "OC_APPLICATION_VERSION=${MIRALL_VERSION_STRING}"
+        "OC_APPLICATION_BUILD_VERSION=${MIRALL_VERSION_FULL}"
         "DEVELOPMENT_TEAM=$ENV{APPLE_DEVELOPMENT_TEAM_ID}"
     COMMENT "Building FinderSyncExt (Finder overlay icons)"
     VERBATIM)
@@ -35,7 +51,8 @@ add_custom_target( mac_fileprovider ALL
         "OC_APPLICATION_NAME=${APPLICATION_NAME}"
         "OC_APPLICATION_REV_DOMAIN=${APPLICATION_REV_DOMAIN}"
         "OC_SOCKETAPI_TEAM_IDENTIFIER_PREFIX=${SOCKETAPI_TEAM_IDENTIFIER_PREFIX}"
-        "OC_APPLICATION_VERSION=${MIRALL_VERSION}"
+        "OC_APPLICATION_VERSION=${MIRALL_VERSION_STRING}"
+        "OC_APPLICATION_BUILD_VERSION=${MIRALL_VERSION_FULL}"
         "DEVELOPMENT_TEAM=$ENV{APPLE_DEVELOPMENT_TEAM_ID}"
     COMMENT "Building FileProviderExt (Virtual file system)"
     VERBATIM)

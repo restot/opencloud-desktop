@@ -242,11 +242,9 @@ private struct ResponseBuilder {
     
     func build(baseURL: URL) -> WebDAVItem? {
         guard let href = href else {
-            NSLog("[WebDAVXMLParser] build: no href")
             return nil
         }
         
-        NSLog("[WebDAVXMLParser] build: href=%@, isDir=%d, size=%lld, etag=%@", href, isDirectory, size, etag ?? "nil")
         
         // URL decode the href first
         let decodedHref = href.removingPercentEncoding ?? href
@@ -266,7 +264,7 @@ private struct ResponseBuilder {
         let isDir = isDirectory || contentType == "httpd/unix-directory" || href.hasSuffix("/")
         
         // Use ocId if available, otherwise generate from path
-        let identifier = ocId ?? WebDAVItem.generateIdentifier(from: remotePath)
+        let identifier = ocId ?? fileId.map { "fileid:" + $0 } ?? WebDAVItem.generateIdentifier(from: remotePath)
         let fileIdentifier = fileId ?? identifier
         
         // Extract filename from path (after removing /remote.php/webdav prefix if present)

@@ -23,7 +23,7 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
     
     let listener = NSXPCListener.anonymous()
     let serviceName = NSFileProviderServiceName("eu.opencloud.desktop.ClientCommunicationService")
-    let fpExtension: FileProviderExtension
+    weak var fpExtension: FileProviderExtension?
     let logger: Logger
     
     init(fpExtension: FileProviderExtension) {
@@ -31,7 +31,6 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
         self.logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "eu.opencloud.desktop.FileProviderExt", 
                             category: "ClientCommunicationService")
         super.init()
-        NSLog("[FileProviderExt] ClientCommunicationService init for domain: %@", fpExtension.domain.identifier.rawValue)
         logger.debug("Instantiating client communication service for domain: \(fpExtension.domain.identifier.rawValue)")
     }
     
@@ -39,8 +38,7 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
     
     func makeListenerEndpoint() throws -> NSXPCListenerEndpoint {
         listener.delegate = self
-        listener.resume()
-        NSLog("[FileProviderExt] makeListenerEndpoint() called - XPC listener ready")
+        listener.activate()
         logger.debug("Created XPC listener endpoint")
         return listener.endpoint
     }
@@ -50,13 +48,19 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection) -> Bool {
         // FileProvider service endpoints can be requested by other applications.
         // Only the signed containing app may configure credentials or erase state.
-        let appURL = Bundle.main.bundleURL.deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-        guard let identifier = Bundle(url: appURL)?.bundleIdentifier,
-              let team = FileProviderExtension.getTeamIdentifierFromEntitlements(),
+        let suffix = ".FileProviderExt"
+        guard let extensionIdentifier = Bundle.main.bundleIdentifier,
+              extensionIdentifier.hasSuffix(suffix) else {
+            logger.error("Rejecting XPC connection: extension bundle identifier unavailable")
+            return false
+        }
+        // Apple requires an extension identifier to be prefixed by its host's.
+        // Derive it from our signed bundle instead of reading outside the sandbox.
+        let identifier = String(extensionIdentifier.dropLast(suffix.count))
+        guard let team = FileProviderExtension.getTeamIdentifierFromEntitlements(),
               identifier.range(of: "^[A-Za-z0-9.-]+$", options: .regularExpression) != nil,
               team.range(of: "^[A-Za-z0-9]+$", options: .regularExpression) != nil else {
-            logger.error("Rejecting XPC connection: signed containing app identity unavailable")
+            logger.error("Rejecting XPC connection: running process signing identity unavailable")
             return false
         }
         let requirement = "anchor apple generic and identifier \"\(identifier)\" and certificate leaf[subject.OU] = \"\(team)\""
@@ -76,33 +80,58 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
     // MARK: - ClientCommunicationProtocol
     
     func getFileProviderDomainIdentifier(completionHandler: @escaping (String?, Error?) -> Void) {
+        guard let fpExtension = fpExtension else {
+            completionHandler(nil, NSFileProviderError(.providerNotFound))
+            return
+        }
         let identifier = fpExtension.domain.identifier.rawValue
-        NSLog("[FileProviderExt] getFileProviderDomainIdentifier() -> %@", identifier)
         logger.debug("Returning file provider domain identifier: \(identifier)")
         completionHandler(identifier, nil)
     }
     
     func configureAccount(withUser user: String, userId: String, serverUrl: String, password: String, davPath: String) {
-        let passwordPreview = password.isEmpty ? "(empty)" : "(\(password.count) chars)"
-        NSLog("[FileProviderExt] configureAccount: user=%@, serverUrl=%@, password=%@, davPath=%@", user, serverUrl, passwordPreview, davPath)
-        logger.info("Received account configuration over XPC for user: \(user) at server: \(serverUrl) davPath: \(davPath)")
+        logger.debug("Received account configuration over XPC for user: \(user) at server: \(serverUrl) davPath: \(davPath)")
         // Legacy method: main app always sends OAuth access tokens, so always use bearer
-        fpExtension.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath, authType: "bearer")
+        fpExtension?.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath, authType: "bearer")
     }
 
     func configureAccount(withUser user: String, userId: String, serverUrl: String, password: String, davPath: String, authType: String) {
-        let passwordPreview = password.isEmpty ? "(empty)" : "(\(password.count) chars)"
-        NSLog("[FileProviderExt] configureAccount(authType=%@): user=%@, serverUrl=%@, password=%@, davPath=%@", authType, user, serverUrl, passwordPreview, davPath)
-        logger.info("Received account configuration over XPC for user: \(user) at server: \(serverUrl) davPath: \(davPath) authType: \(authType)")
-        fpExtension.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath, authType: authType)
+        logger.debug("Received account configuration over XPC for user: \(user) at server: \(serverUrl) davPath: \(davPath) authType: \(authType)")
+        fpExtension?.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl, password: password, davPath: davPath, authType: authType)
     }
     
+    func configureAccount(withUser user: String, userId: String, serverUrl: String, password: String, davPath: String, authType: String, completionHandler: @escaping (Error?) -> Void) {
+        guard let fpExtension = fpExtension else {
+            completionHandler(NSFileProviderError(.providerNotFound))
+            return
+        }
+        completionHandler(fpExtension.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl,
+                                                        password: password, davPath: davPath, authType: authType))
+    }
+
+    func configureAccount(withUser user: String, userId: String, serverUrl: String, password: String, davPath: String, authType: String, generation: String, completionHandler: @escaping (Error?) -> Void) {
+        guard let fpExtension = fpExtension else {
+            completionHandler(NSFileProviderError(.providerNotFound))
+            return
+        }
+        completionHandler(fpExtension.setupDomainAccount(user: user, userId: userId, serverUrl: serverUrl,
+                                                        password: password, davPath: davPath, authType: authType, generation: generation))
+    }
+
     func removeAccountConfig() {
-        logger.info("Received request to remove account configuration")
-        fpExtension.removeAccountConfig()
+        logger.debug("Received request to remove account configuration")
+        logger.warning("Rejecting cleanup without a configuration generation")
     }
 
     func removeAccountConfig(completionHandler: @escaping (Error?) -> Void) {
-        fpExtension.removeAccountConfig(completionHandler: completionHandler)
+        completionHandler(NSFileProviderError(.notAuthenticated))
+    }
+
+    func removeAccountConfig(withGeneration generation: String, completionHandler: @escaping (Error?) -> Void) {
+        guard let fpExtension = fpExtension else {
+            completionHandler(NSFileProviderError(.providerNotFound))
+            return
+        }
+        fpExtension.removeAccountConfig(generation: generation, completionHandler: completionHandler)
     }
 }

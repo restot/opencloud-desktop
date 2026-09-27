@@ -24,10 +24,10 @@
 #include "syncfilestatustracker.h"
 
 #include <QSet>
+#include <QSharedPointer>
 #include <QString>
 #include <QThread>
 
-#include <memory>
 #include <optional>
 #include <set>
 

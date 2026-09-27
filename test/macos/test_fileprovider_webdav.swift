@@ -32,6 +32,21 @@ private final class MockDAVProtocol: URLProtocol {
         precondition(condition(), message)
     }
     static func main() async throws {
+        let deniedRead = fileProviderError(WebDAVError.permissionDenied) as NSError
+        let deniedWrite = fileProviderError(WebDAVError.permissionDenied, isWrite: true) as NSError
+        check(deniedRead.domain == NSCocoaErrorDomain && deniedRead.code == CocoaError.fileReadNoPermission.rawValue,
+              "read permissions use Cocoa read error")
+        check(deniedWrite.domain == NSCocoaErrorDomain && deniedWrite.code == CocoaError.fileWriteNoPermission.rawValue,
+              "write permissions use Cocoa write error")
+        check((fileProviderError(WebDAVError.httpError(statusCode: 507, message: nil)) as NSError).code == NSFileProviderError.insufficientQuota.rawValue,
+              "quota remains distinct from permissions")
+        check((fileProviderError(WebDAVError.notAuthenticated) as NSError).code == NSFileProviderError.notAuthenticated.rawValue,
+              "authentication remains distinct from permissions")
+        let identifier = WebDAVItem.generateIdentifier(from: "/folder/literal%20 name.txt")
+        check(identifier.hasPrefix("path:"), "fallback IDs are explicit")
+        check(WebDAVItem.path(fromIdentifier: identifier) == "/folder/literal%20 name.txt", "path IDs round trip")
+        check(WebDAVItem.path(fromIdentifier: String(identifier.dropFirst(5))) == "/folder/literal%20 name.txt", "old path IDs remain readable")
+        check(WebDAVItem.path(fromIdentifier: "fileid:12345") == nil, "server IDs are not decoded as paths")
         let base = URL(string: "https://example.test/remote.php/webdav/")!
         let parser = WebDAVXMLParser(baseURL: base)
         let failedProperties = """
@@ -43,6 +58,9 @@ private final class MockDAVProtocol: URLProtocol {
         check(items[0].filename == "literal%20name.txt", "decode literal percent filenames only once")
         check(items[0].etag == "\"version-1\"", "preserve HTTP entity-tag quotes")
         check(!items[0].isDirectory, "ignore properties from failed propstat")
+        let fileIDResponse = "<d:propstat><d:prop><oc:fileid>12345</oc:fileid></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>"
+        let fileIDItem = parser.parse(data: document(response("/remote.php/webdav/file.txt", extra: fileIDResponse)))!.first!
+        check(fileIDItem.ocId == "fileid:12345", "server fileid supplies stable identity when oc:id is absent")
         let absolute = parser.parse(data: document(response("https://example.test/remote.php/webdav/literal%252Fname.txt")))!
         check(absolute[0].filename == "literal%2Fname.txt", "absolute href percent decoding")
         check(parser.parse(data: Data("<html/>".utf8)) == nil, "reject non-WebDAV responses")
@@ -75,6 +93,23 @@ private final class MockDAVProtocol: URLProtocol {
             preconditionFailure("missing directory response must fail")
         } catch WebDAVError.parseError { }
 
+        let trailingSlashClient = WebDAVClient(serverURL: URL(string: "https://example.test")!, davPath: "/review/",
+                                               username: "user", password: "test", sessionConfiguration: config)
+        MockDAVProtocol.requests = []
+        MockDAVProtocol.handler = { request in (207, document(response(request.url!.path))) }
+        _ = try await trailingSlashClient.listDirectory(path: "/")
+        check(MockDAVProtocol.requests.last?.url?.absoluteString == "https://example.test/review/", "DAV root with trailing slash must not produce a double slash")
+        _ = try await trailingSlashClient.listDirectory(path: "child.txt")
+        check(MockDAVProtocol.requests.last?.url?.path == "/review/child.txt", "relative child joins DAV root once")
+        _ = try await trailingSlashClient.listDirectory(path: "/review/child.txt")
+        check(MockDAVProtocol.requests.last?.url?.path == "/review/child.txt", "absolute DAV child keeps its path")
+        _ = try await trailingSlashClient.listDirectory(path: "/review-other/child.txt")
+        check(MockDAVProtocol.requests.last?.url?.path == "/review/review-other/child.txt", "DAV prefix matching respects path component boundaries")
+        let serverRootClient = WebDAVClient(serverURL: URL(string: "https://example.test")!, davPath: "/",
+                                            username: "user", password: "test", sessionConfiguration: config)
+        _ = try await serverRootClient.listDirectory(path: "child.txt")
+        check(MockDAVProtocol.requests.last?.url?.path == "/child.txt", "DAV rooted at server handles relative child")
+
         let upload = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try Data("local edit".utf8).write(to: upload)
         defer { try? FileManager.default.removeItem(at: upload) }
@@ -86,6 +121,7 @@ private final class MockDAVProtocol: URLProtocol {
         } catch WebDAVError.conflict { }
         check(MockDAVProtocol.requests.count == 1, "never retry a conflicting upload unconditionally")
         check(MockDAVProtocol.requests[0].value(forHTTPHeaderField: "If-Match") == "\"old-version\"", "quote legacy cached ETags")
+        check(MockDAVProtocol.requests[0].value(forHTTPHeaderField: "Content-Type") == "text/plain", "upload media type uses destination filename rather than temporary contents URL")
         do {
             _ = try await client.uploadFile(from: upload, to: "/file.txt", ifNoneMatch: true)
             preconditionFailure("creation collision must fail")
@@ -98,6 +134,24 @@ private final class MockDAVProtocol: URLProtocol {
         } catch WebDAVError.conflict { }
         check(MockDAVProtocol.requests.count == 1, "a rejected deletion must not retry")
         check(MockDAVProtocol.requests[0].value(forHTTPHeaderField: "If-Match") == "\"old-version\"", "deletion checks the version on disk")
+        for method in ["PUT", "MKCOL"] {
+            MockDAVProtocol.requests = []
+            MockDAVProtocol.handler = { request in
+                if request.httpMethod == method { return (201, Data()) }
+                let reads = MockDAVProtocol.requests.filter { $0.httpMethod == "PROPFIND" }.count
+                return reads == 1 ? (503, Data()) : (207, document(response("/remote.php/webdav/new-item")))
+            }
+            if method == "PUT" {
+                _ = try await client.uploadFile(from: upload, to: "/new-item", ifNoneMatch: true)
+            } else {
+                _ = try await client.createDirectory(at: "/new-item")
+            }
+            check(MockDAVProtocol.requests.filter { $0.httpMethod == method }.count == 1,
+                  "successful mutation must not repeat when its metadata read fails")
+            check(MockDAVProtocol.requests.filter { $0.httpMethod == "PROPFIND" }.count == 2,
+                  "retry only the metadata read after successful mutation")
+        }
+
         let movedResponse = document(response("/remote.php/webdav/renamed.txt", extra:
             "<d:propstat><d:prop><oc:id>stable-server-id</oc:id></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>"))
         MockDAVProtocol.requests = []
@@ -127,6 +181,22 @@ private final class MockDAVProtocol: URLProtocol {
             _ = try await client.moveItem(from: "/source.txt", to: "/renamed.txt", expectedIdentifier: fallback)
             preconditionFailure("path-derived identity cannot prove prior MOVE success")
         } catch WebDAVError.fileNotFound { }
+        MockDAVProtocol.requests = []
+        MockDAVProtocol.handler = { request in
+            if request.httpMethod == "PUT" { return (201, Data()) }
+            return (207, document(response(request.url!.path, extra:
+                "<d:propstat><d:prop><oc:id>conflict-copy-id</oc:id></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>")))
+        }
+        let conflictCopy = try await client.uploadConflictCopy(from: upload, directory: "/", filename: "report.txt")
+        check(conflictCopy.ocId == "conflict-copy-id", "conflicting edit gets a separate server identity")
+        check(conflictCopy.filename.contains(" (conflict ") && conflictCopy.filename.hasSuffix(".txt"),
+              "conflict copy keeps a recognizable filename and extension")
+        let copyWrites = MockDAVProtocol.requests.filter { $0.httpMethod == "PUT" }
+        check(copyWrites.count == 1 && copyWrites[0].url?.path != "/remote.php/webdav/report.txt", "conflict recovery never writes original")
+        check(copyWrites[0].value(forHTTPHeaderField: "If-None-Match") == "*", "conflict recovery cannot overwrite another file")
+        let longCopy = try await client.uploadConflictCopy(from: upload, directory: "/", filename: String(repeating: "é", count: 120) + ".txt")
+        check(longCopy.filename.utf8.count <= 255 && longCopy.filename.hasSuffix(".txt"),
+              "conflict suffix respects filesystem byte limit for Unicode filenames")
         print("FileProvider WebDAV regression tests passed")
     }
 }

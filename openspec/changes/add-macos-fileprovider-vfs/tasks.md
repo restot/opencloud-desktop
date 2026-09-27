@@ -96,15 +96,15 @@
 
 ## 4.5 Phase 4.5: Runtime Stability Fixes
 - [x] 4.5.1 Periodic OAuth token refresh (4-min timer + retry on 401)
-- [x] 4.5.2 Shared credential store across extension instances (static properties)
-- [x] 4.5.3 Credential persistence via UserDefaults (app group container)
+- [x] 4.5.2 Locked credential state shared only by instances of the same domain
+- [x] 4.5.3 Credential persistence in Keychain with configuration-generation validation
 - [x] 4.5.4 Restore credentials on extension init (cross-restart availability)
-- [x] 4.5.5 System cache invalidation via reimportItems(below: .rootContainer) after auth
-- [x] 4.5.6 Safe reimport handling (mayAlreadyExist → PROPFIND, not upload)
+- [x] 4.5.5 Refresh enumerators after authentication without forcing full-tree reimport
+- [x] 4.5.6 Safe reimport handling with content comparison and conditional creation
 - [x] 4.5.7 MKCOL 405 fallback (directory already exists → PROPFIND instead)
-- [x] 4.5.8 Auth waiting in createItem (15s timeout for XPC credential delivery)
+- [x] 4.5.8 Report missing authentication promptly so the system can retry after XPC configuration
 - [x] 4.5.9 On-demand item/folder resolution for stale identifiers in enumerateChanges
-- [x] 4.5.10 First-time enumeration detection in enumerateChanges (empty DB → full report)
+- [x] 4.5.10 Persistent change anchors and explicit expiration after cache/history reset
 - [x] 4.5.11 XML parser propstat ordering fix (removed isSuccess guard, use empty-value checks)
 - [x] 4.5.12 Error wrapping (WebDAVError → NSFileProviderError) in createItem/modifyItem
 

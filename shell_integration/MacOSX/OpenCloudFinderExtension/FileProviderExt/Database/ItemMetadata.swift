@@ -19,7 +19,7 @@ import Foundation
 struct ItemMetadata: Sendable, Equatable {
     /// Server-assigned unique identifier (oc:id from PROPFIND).
     /// Used as NSFileProviderItemIdentifier.
-    let ocId: String
+    var ocId: String
     
     /// Server-assigned file ID (oc:fileid from PROPFIND).
     let fileId: String

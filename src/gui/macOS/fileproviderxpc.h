@@ -18,8 +18,10 @@
 #include <QObject>
 #include <QSet>
 #include <functional>
+#include <memory>
 
 #include "gui/accountstate.h"
+#include "libsync/common/result.h"
 
 namespace OCC {
 namespace Mac {
@@ -31,13 +33,15 @@ namespace Mac {
      * exposed NSFileProviderServiceSource services. It allows the main app to
      * send account credentials and configuration to the extensions.
      */
-    class FileProviderXPC : public QObject
+    class OPENCLOUD_GUI_EXPORT FileProviderXPC : public QObject
     {
         Q_OBJECT
 
     public:
-        explicit FileProviderXPC(QObject *parent = nullptr);
+        explicit FileProviderXPC(QObject *parent = nullptr, const QString &appGroupIdentifier = {});
         ~FileProviderXPC() override;
+        static Result<void, QString> recordAccountRemoval(const QString &domainIdentifier, const QString &appGroupIdentifier = {});
+        QString appGroupIdentifier() const { return _appGroupIdentifier; }
 
         /**
          * @brief Check if a FileProvider domain is reachable via XPC.
@@ -58,7 +62,7 @@ namespace Mac {
         /**
          * @brief Send authentication to a specific FileProvider domain.
          */
-        void authenticateFileProviderDomain(const QString &domainIdentifier);
+        void authenticateFileProviderDomain(QString domainIdentifier);
 
         /**
          * @brief Remove authentication from a specific FileProvider domain.
@@ -71,6 +75,7 @@ namespace Mac {
 
     Q_SIGNALS:
         void domainConnected(const QString &domainIdentifier);
+        void domainStatusChanged(const QString &domainIdentifier, const QString &error);
 
     private Q_SLOTS:
         void slotAccountStateChanged(AccountState::State state);
@@ -79,11 +84,16 @@ namespace Mac {
 
     private:
         void clearConnections();
+        void authenticateAccountDomains(const QUuid &account);
         void finishClearingAccount(const QString &domainIdentifier, bool success);
         QHash<QString, QList<std::function<void(bool)>>> _cleanupCallbacks;
 
+        QHash<QString, int> _authenticationRetries;
+        QHash<QString, std::shared_ptr<bool>> _configurationRequests;
+        QString _appGroupIdentifier;
         QHash<QString, void *> _connections;
         QSet<QString> _pendingDomains;
+        QHash<QString, std::shared_ptr<bool>> _connectionRequests;
         bool _discoveryPending = false;
         // Keys are FileProvider domain identifiers, values are NSObject<ClientCommunicationProtocol>*
         QHash<QString, void *> _clientCommServices;

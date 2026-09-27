@@ -28,10 +28,19 @@ actor ItemDatabase {
     /// Database file URL
     private let databaseURL: URL
     
+    /// Identity survives metadata-cache replacement. Id-less DAV resources have path
+    /// identity until an observed deletion; only a confirmed local MOVE changes it.
+    private struct Identity {
+        var identifier: String
+        var path: String
+        var serverIdentifier: String
+    }
+    private let identitiesURL: URL
+
     /// Root container identifier (special value)
     static let rootContainerId = "rootContainer"
     
-    init(containerURL: URL, domainIdentifier: String) throws {
+    init(containerURL: URL, domainIdentifier: String, changeRetentionLimit: Int = 100_000) throws {
         // Create database in the container's support directory
         let supportDir = containerURL.appendingPathComponent("FileProvider", isDirectory: true)
         try FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
@@ -40,7 +49,8 @@ actor ItemDatabase {
         let dbName = "items-\(domainIdentifier).sqlite"
         let dbURL = supportDir.appendingPathComponent(dbName)
         self.databaseURL = dbURL
-        
+        self.identitiesURL = supportDir.appendingPathComponent("identities-\(domainIdentifier).sqlite")
+
         logger.info("Opening database at \(dbURL.path)")
         
         // Open or create database
@@ -53,13 +63,32 @@ actor ItemDatabase {
         sqlite3_busy_timeout(dbHandle, 5_000)
         self.db = dbHandle
         
+        // Attach the durable identity store so metadata and path changes commit
+        // together, while replacing the metadata cache does not discard identities.
+        var attach: OpaquePointer?
+        guard sqlite3_prepare_v2(dbHandle, "ATTACH DATABASE ? AS identities", -1, &attach, nil) == SQLITE_OK else {
+            throw DatabaseError.openFailed(String(cString: sqlite3_errmsg(dbHandle)))
+        }
+        sqlite3_bind_text(attach, 1, identitiesURL.path, -1, SQLITE_TRANSIENT)
+        let attachResult = sqlite3_step(attach)
+        sqlite3_finalize(attach)
+        guard attachResult == SQLITE_DONE else {
+            throw DatabaseError.openFailed(String(cString: sqlite3_errmsg(dbHandle)))
+        }
         // Create tables using static helper (doesn't need actor isolation)
-        try Self.createTables(db: dbHandle)
+        try Self.createTables(db: dbHandle, changeRetentionLimit: max(1, changeRetentionLimit))
     }
     
     /// Static helper for table creation - doesn't require actor isolation
-    private static func createTables(db: OpaquePointer?) throws {
+    private static func createTables(db: OpaquePointer?, changeRetentionLimit: Int) throws {
         let createSQL = """
+            BEGIN IMMEDIATE;
+            CREATE TABLE IF NOT EXISTS identities.item_identities (
+                provider_id TEXT PRIMARY KEY,
+                remote_path TEXT NOT NULL,
+                server_id TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS identities.idx_identity_path ON item_identities(remote_path);
             CREATE TABLE IF NOT EXISTS items (
                 oc_id TEXT PRIMARY KEY,
                 file_id TEXT NOT NULL,
@@ -86,6 +115,8 @@ actor ItemDatabase {
             
             CREATE INDEX IF NOT EXISTS idx_items_parent ON items(parent_oc_id);
             CREATE INDEX IF NOT EXISTS idx_items_remote_path ON items(remote_path);
+            INSERT OR IGNORE INTO identities.item_identities(provider_id, remote_path, server_id)
+                SELECT oc_id, CASE WHEN remote_path = '/' THEN '/' ELSE rtrim(remote_path, '/') END, oc_id FROM items;
 
             CREATE TABLE IF NOT EXISTS sync_state (epoch TEXT NOT NULL);
             INSERT INTO sync_state(epoch) SELECT lower(hex(randomblob(16)))
@@ -95,6 +126,19 @@ actor ItemDatabase {
                 oc_id TEXT NOT NULL,
                 parent_oc_id TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS sync_retention (minimum_sequence INTEGER NOT NULL);
+            INSERT INTO sync_retention SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM sync_retention);
+            DROP TRIGGER IF EXISTS prune_item_changes;
+            CREATE TRIGGER prune_item_changes AFTER INSERT ON item_changes
+                WHEN NEW.sequence % \(max(1, min(1000, changeRetentionLimit / 10))) = 0
+                BEGIN
+                    UPDATE sync_retention SET minimum_sequence = max(minimum_sequence, NEW.sequence - \(changeRetentionLimit));
+                    DELETE FROM item_changes WHERE sequence <= (SELECT minimum_sequence FROM sync_retention);
+                END;
+            UPDATE sync_retention SET minimum_sequence = max(minimum_sequence,
+                COALESCE((SELECT MAX(sequence) FROM item_changes), 0) - \(changeRetentionLimit));
+            DELETE FROM item_changes WHERE sequence <= (SELECT minimum_sequence FROM sync_retention);
+            CREATE INDEX IF NOT EXISTS idx_changes_parent_sequence ON item_changes(parent_oc_id, sequence);
             CREATE TRIGGER IF NOT EXISTS items_before_replace BEFORE INSERT ON items
                 WHEN EXISTS (SELECT 1 FROM items WHERE oc_id = NEW.oc_id AND parent_oc_id != NEW.parent_oc_id)
                 BEGIN
@@ -119,12 +163,14 @@ actor ItemDatabase {
             CREATE TRIGGER IF NOT EXISTS items_delete AFTER DELETE ON items BEGIN
                 INSERT INTO item_changes(oc_id, parent_oc_id) VALUES (OLD.oc_id, OLD.parent_oc_id);
             END;
+            COMMIT;
             """
         
         var errMsg: UnsafeMutablePointer<CChar>?
         if sqlite3_exec(db, createSQL, nil, nil, &errMsg) != SQLITE_OK {
             let error = errMsg != nil ? String(cString: errMsg!) : "Unknown error"
             sqlite3_free(errMsg)
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
             throw DatabaseError.createTableFailed(error)
         }
     }
@@ -213,7 +259,8 @@ actor ItemDatabase {
             return
         }
 
-        try executeUpdate("BEGIN IMMEDIATE")
+        let ownsTransaction = sqlite3_get_autocommit(db) != 0
+        if ownsTransaction { try executeUpdate("BEGIN IMMEDIATE") }
         do {
             try storeItemMetadata(metadata)
             let oldPrefix = existing.remotePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -234,17 +281,37 @@ actor ItemDatabase {
             guard sqlite3_step(stmt) == SQLITE_DONE else {
                 throw DatabaseError.updateFailed(String(cString: sqlite3_errmsg(db)))
             }
-            try executeUpdate("COMMIT")
+            // Descendant identity paths must follow a directory even if the cache
+            // disappears before any child is accessed again.
+            try executeBoundUpdate("UPDATE identities.item_identities SET remote_path = ? || substr(remote_path, length(?) + 1) WHERE substr(remote_path, 1, length(?)) = ?", values: [newPath, oldPath, oldPath, oldPath])
+            if ownsTransaction { try executeUpdate("COMMIT") }
         } catch {
-            try? executeUpdate("ROLLBACK")
+            if ownsTransaction { try? executeUpdate("ROLLBACK") }
             throw error
         }
     }
 
     /// Merge server fields inside the actor so a concurrent download cannot lose its state.
-    func mergeServerMetadata(_ metadata: ItemMetadata, fetchedAfter: Date? = nil) throws -> ItemMetadata {
+    func mergeServerMetadata(_ metadata: ItemMetadata, fetchedAfter: Date? = nil, preservingIdentifier: String? = nil) throws -> ItemMetadata {
         var merged = metadata
-        if let existing = itemMetadata(ocId: metadata.ocId) {
+        let atPath = itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath))
+            ?? itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath) + "/")
+        if let atPath = atPath, let fetchedAfter = fetchedAfter, atPath.syncTime > fetchedAfter {
+            return atPath
+        }
+        if metadata.ocId.hasPrefix("path:") {
+            if let preservingIdentifier = preservingIdentifier {
+                merged.ocId = preservingIdentifier
+            } else if let existing = itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath))
+                        ?? itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath) + "/") {
+                merged.ocId = existing.ocId
+            } else if let existing = try identity(remotePath: metadata.remotePath), WebDAVItem.path(fromIdentifier: existing.serverIdentifier) != nil {
+                merged.ocId = existing.identifier
+            } else {
+                merged.ocId = "local:" + UUID().uuidString.lowercased()
+            }
+        }
+        if let existing = itemMetadata(ocId: merged.ocId) {
             if let fetchedAfter = fetchedAfter, existing.syncTime > fetchedAfter { return existing }
             merged.isDownloaded = existing.isDownloaded
             merged.isDownloading = existing.isDownloading
@@ -253,8 +320,161 @@ actor ItemDatabase {
             merged.status = existing.status
             merged.statusError = existing.statusError
         }
-        try addItemMetadata(merged)
+        try transaction {
+            if let replaced = itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath))
+                ?? itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath) + "/"), replaced.ocId != merged.ocId {
+                // A different stable server identifier at this path is an observed
+                // replacement, not a rename of the old resource.
+                if replaced.isDirectory { try deleteDirectoryAndSubdirectories(ocId: replaced.ocId) }
+                else { try deleteItemMetadata(ocId: replaced.ocId) }
+            }
+            if let previous = try identity(remotePath: metadata.remotePath), previous.identifier != merged.ocId {
+                try executeBoundUpdate("DELETE FROM identities.item_identities WHERE provider_id = ?", values: [previous.identifier])
+            }
+            try rememberIdentity(merged, serverIdentifier: metadata.ocId)
+            try addItemMetadata(merged)
+        }
         return merged
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        path == "/" ? path : "/" + path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    private func identity(identifier: String? = nil, remotePath: String? = nil) throws -> Identity? {
+        var stmt: OpaquePointer?
+        let sql = identifier != nil
+            ? "SELECT provider_id, remote_path, server_id FROM identities.item_identities WHERE provider_id = ?"
+            : "SELECT provider_id, remote_path, server_id FROM identities.item_identities WHERE remote_path = ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, identifier ?? Self.normalizedPath(remotePath!), -1, SQLITE_TRANSIENT)
+        let result = sqlite3_step(stmt)
+        if result == SQLITE_DONE { return nil }
+        guard result == SQLITE_ROW else { throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db))) }
+        return Identity(identifier: columnString(stmt, 0), path: columnString(stmt, 1), serverIdentifier: columnString(stmt, 2))
+    }
+
+    private func rememberIdentity(_ metadata: ItemMetadata, serverIdentifier: String) throws {
+        let existing = try identity(identifier: metadata.ocId)
+        if existing?.path == Self.normalizedPath(metadata.remotePath), existing?.serverIdentifier == serverIdentifier { return }
+        try executeBoundUpdate("INSERT OR REPLACE INTO identities.item_identities(provider_id, remote_path, server_id) VALUES (?, ?, ?)",
+                               values: [metadata.ocId, Self.normalizedPath(metadata.remotePath), serverIdentifier])
+    }
+
+    private func executeBoundUpdate(_ sql: String, values: [String]) throws {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DatabaseError.updateFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        for (index, value) in values.enumerated() { sqlite3_bind_text(stmt, Int32(index + 1), value, -1, SQLITE_TRANSIENT) }
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw DatabaseError.updateFailed(String(cString: sqlite3_errmsg(db))) }
+    }
+
+    private func transaction<T>(_ action: () throws -> T) throws -> T {
+        let ownsTransaction = sqlite3_get_autocommit(db) != 0
+        if ownsTransaction { try executeUpdate("BEGIN IMMEDIATE") }
+        do {
+            let value = try action()
+            if ownsTransaction { try executeUpdate("COMMIT") }
+            return value
+        } catch {
+            if ownsTransaction { try? executeUpdate("ROLLBACK") }
+            throw error
+        }
+    }
+
+    /// Resolve retained Finder identifiers without treating a missing cache row as deletion.
+    /// Stable server IDs can be rediscovered; id-less resources use their retained path map.
+    func resolveItem(identifier: String, webdav: WebDAVClient) async throws -> ItemMetadata? {
+        if let cached = itemMetadata(ocId: identifier) { return cached }
+        let identity = try identity(identifier: identifier)
+        let knownPath = identity?.path ?? WebDAVItem.path(fromIdentifier: identifier)
+        if let path = knownPath {
+            do {
+                try Task.checkCancellation()
+                if let remote = try await webdav.listDirectory(path: path).first {
+                    let sameResource = remote.ocId == identifier
+                        || remote.ocId == identity?.serverIdentifier
+                        || (remote.ocId.hasPrefix("path:") && identity.flatMap({ WebDAVItem.path(fromIdentifier: $0.serverIdentifier) }) != nil)
+                        || (identity == nil && WebDAVItem.path(fromIdentifier: identifier) != nil && remote.ocId.hasPrefix("path:"))
+                    if sameResource {
+                        let parent = try await resolveParent(path: remote.parentPath, webdav: webdav)
+                        return try mergeServerMetadata(ItemMetadata(from: remote, parentOcId: parent), preservingIdentifier: identifier)
+                    }
+                }
+            } catch WebDAVError.fileNotFound {
+                // A stable-ID resource may have moved while the extension was stopped.
+            }
+        }
+        // Without a retained map there is no safe way to associate a local UUID
+        // with another path. In particular, equal etags are not item identity.
+        if identifier.hasPrefix("local:") { return nil }
+        var pending: [(path: String, parent: String)] = [("/", Self.rootContainerId)]
+        var visited = Set<String>()
+        var index = 0
+        while index < pending.count {
+            try Task.checkCancellation()
+            let folder = pending[index]
+            index += 1
+            guard visited.insert(folder.path).inserted else { continue }
+            let listing: [WebDAVItem]
+            do {
+                listing = try await webdav.listDirectory(path: folder.path)
+            } catch WebDAVError.fileNotFound { continue }
+            for remote in listing.dropFirst() {
+                try Task.checkCancellation()
+                let metadata = try mergeServerMetadata(ItemMetadata(from: remote, parentOcId: folder.parent))
+                if remote.ocId == identifier || metadata.ocId == identifier { return metadata }
+                if metadata.isDirectory { pending.append((metadata.remotePath, metadata.ocId)) }
+            }
+        }
+        return nil
+    }
+
+    private func resolveParent(path: String, webdav: WebDAVClient) async throws -> String {
+        try Task.checkCancellation()
+        if await webdav.isRootPath(path) { return Self.rootContainerId }
+        if let cached = itemMetadata(remotePath: path) ?? itemMetadata(remotePath: path + "/") {
+            return cached.ocId
+        }
+        guard let remote = try await webdav.listDirectory(path: path).first,
+              remote.isDirectory, remote.parentPath != path else { throw WebDAVError.fileNotFound }
+        let parent = try await resolveParent(path: remote.parentPath, webdav: webdav)
+        return try mergeServerMetadata(ItemMetadata(from: remote, parentOcId: parent)).ocId
+    }
+
+    /// Keyset pages keep memory and observer batches bounded without OFFSET scans.
+    func itemsPage(parentOcId: String?, after identifier: String? = nil, limit: Int = 500, directoriesOnly: Bool = false) throws -> (items: [ItemMetadata], next: String?) {
+        var stmt: OpaquePointer?
+        let sql = "SELECT * FROM items WHERE (? IS NULL OR parent_oc_id = ?) AND (? IS NULL OR oc_id > ?) AND (? = 0 OR is_directory = 1) ORDER BY oc_id LIMIT ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        for index: Int32 in [1, 2] {
+            if let parentOcId = parentOcId { sqlite3_bind_text(stmt, index, parentOcId, -1, SQLITE_TRANSIENT) }
+            else { sqlite3_bind_null(stmt, index) }
+        }
+        for index: Int32 in [3, 4] {
+            if let identifier = identifier { sqlite3_bind_text(stmt, index, identifier, -1, SQLITE_TRANSIENT) }
+            else { sqlite3_bind_null(stmt, index) }
+        }
+        sqlite3_bind_int(stmt, 5, directoriesOnly ? 1 : 0)
+        sqlite3_bind_int64(stmt, 6, Int64(max(1, limit) + 1))
+        var items: [ItemMetadata] = []
+        var result = sqlite3_step(stmt)
+        while result == SQLITE_ROW {
+            if let metadata = metadataFromRow(stmt) { items.append(metadata) }
+            result = sqlite3_step(stmt)
+        }
+        guard result == SQLITE_DONE else { throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db))) }
+        let more = items.count > max(1, limit)
+        if more { items.removeLast() }
+        return (items, more ? items.last?.ocId : nil)
     }
 
     private func executeUpdate(_ sql: String) throws {
@@ -341,66 +561,31 @@ actor ItemDatabase {
 
     /// Delete item metadata by ocId
     func deleteItemMetadata(ocId: String) throws {
-        let sql = "DELETE FROM items WHERE oc_id = ?"
-        
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            let error = String(cString: sqlite3_errmsg(db))
-            throw DatabaseError.deleteFailed(error)
-        }
-        defer { sqlite3_finalize(stmt) }
-        
-        sqlite3_bind_text(stmt, 1, ocId, -1, SQLITE_TRANSIENT)
-        
-        if sqlite3_step(stmt) != SQLITE_DONE {
-            let error = String(cString: sqlite3_errmsg(db))
-            throw DatabaseError.deleteFailed(error)
+        try transaction {
+            try executeBoundUpdate("DELETE FROM identities.item_identities WHERE provider_id = ?", values: [ocId])
+            try executeBoundUpdate("DELETE FROM items WHERE oc_id = ?", values: [ocId])
         }
     }
-    
-    /// Delete directory and all its descendants using a recursive CTE in a single transaction
+
+    /// Retire identity and cache rows together, including descendants of a deleted folder.
     func deleteDirectoryAndSubdirectories(ocId: String) throws {
-        var errMsg: UnsafeMutablePointer<CChar>?
-        guard sqlite3_exec(db, "BEGIN", nil, nil, &errMsg) == SQLITE_OK else {
-            let error = errMsg != nil ? String(cString: errMsg!) : "Unknown error"
-            sqlite3_free(errMsg)
-            throw DatabaseError.deleteFailed("Failed to begin transaction: \(error)")
-        }
-
-        let sql = """
-            WITH RECURSIVE descendants(oc_id) AS (
-                SELECT oc_id FROM items WHERE oc_id = ?
-                UNION
-                SELECT i.oc_id FROM items i
-                INNER JOIN descendants d ON i.parent_oc_id = d.oc_id
-            )
-            DELETE FROM items WHERE oc_id IN (SELECT oc_id FROM descendants)
-            """
-
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            let error = String(cString: sqlite3_errmsg(db))
-            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
-            throw DatabaseError.deleteFailed("Failed to prepare recursive delete: \(error)")
-        }
-        defer { sqlite3_finalize(stmt) }
-
-        sqlite3_bind_text(stmt, 1, ocId, -1, SQLITE_TRANSIENT)
-
-        if sqlite3_step(stmt) != SQLITE_DONE {
-            let error = String(cString: sqlite3_errmsg(db))
-            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
-            throw DatabaseError.deleteFailed("Failed to execute recursive delete: \(error)")
-        }
-
-        guard sqlite3_exec(db, "COMMIT", nil, nil, &errMsg) == SQLITE_OK else {
-            let error = errMsg != nil ? String(cString: errMsg!) : "Unknown error"
-            sqlite3_free(errMsg)
-            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
-            throw DatabaseError.deleteFailed("Failed to commit transaction: \(error)")
+        try transaction {
+            if let directory = itemMetadata(ocId: ocId) {
+                let prefix = directory.remotePath.hasSuffix("/") ? directory.remotePath : directory.remotePath + "/"
+                try executeBoundUpdate("DELETE FROM identities.item_identities WHERE provider_id = ? OR substr(remote_path, 1, length(?)) = ?", values: [ocId, prefix, prefix])
+            }
+            let sql = """
+                WITH RECURSIVE descendants(oc_id) AS (
+                    SELECT oc_id FROM items WHERE oc_id = ?
+                    UNION
+                    SELECT i.oc_id FROM items i INNER JOIN descendants d ON i.parent_oc_id = d.oc_id
+                )
+                DELETE FROM items WHERE oc_id IN (SELECT oc_id FROM descendants)
+                """
+            try executeBoundUpdate(sql, values: [ocId])
         }
     }
-    
+
     /// Update download state
     func setDownloaded(ocId: String, downloaded: Bool) throws {
         let sql = "UPDATE items SET is_downloaded = ?, is_downloading = 0, status = 0 WHERE oc_id = ?"
@@ -421,6 +606,28 @@ actor ItemDatabase {
         }
     }
     
+    /// Completion of an older GET must not overwrite metadata already refreshed
+    /// to a newer server version. Keep concurrent upload state intact as well.
+    func finishDownload(ocId: String, matchingETag: String, size: Int64) throws {
+        let sql = """
+            UPDATE items SET is_downloaded = 1, is_downloading = 0, size = ?,
+                status = CASE WHEN status IN (1, 3) THEN 0 ELSE status END,
+                status_error = CASE WHEN status IN (1, 3) THEN NULL ELSE status_error END
+            WHERE oc_id = ? AND etag = ?
+            """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DatabaseError.updateFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, size)
+        sqlite3_bind_text(stmt, 2, ocId, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 3, matchingETag, -1, SQLITE_TRANSIENT)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw DatabaseError.updateFailed(String(cString: sqlite3_errmsg(db)))
+        }
+    }
+
     /// Update file size after download
     func updateSize(ocId: String, size: Int64) throws {
         let sql = "UPDATE items SET size = ? WHERE oc_id = ?"
@@ -491,24 +698,21 @@ actor ItemDatabase {
 
     /// Clear all items (for re-enumeration)
     func clearAll() throws {
-        let sql = "DELETE FROM items"
-        var errMsg: UnsafeMutablePointer<CChar>?
-        if sqlite3_exec(db, sql, nil, nil, &errMsg) != SQLITE_OK {
-            let error = errMsg != nil ? String(cString: errMsg!) : "Unknown error"
-            sqlite3_free(errMsg)
-            throw DatabaseError.deleteFailed(error)
+        try transaction {
+            try executeUpdate("DELETE FROM identities.item_identities")
+            try executeUpdate("DELETE FROM items")
         }
     }
-    
+
     /// A persisted epoch rejects anchors from a replaced database or the old timestamp format.
     func currentSyncAnchor() throws -> Data {
         let state = try syncState()
         return Data("\(state.epoch):\(state.sequence)".utf8)
     }
 
-    private func syncState() throws -> (epoch: String, sequence: Int64) {
+    private func syncState() throws -> (epoch: String, sequence: Int64, minimum: Int64) {
         var stmt: OpaquePointer?
-        let sql = "SELECT epoch, COALESCE((SELECT MAX(sequence) FROM item_changes), 0) FROM sync_state"
+        let sql = "SELECT epoch, COALESCE((SELECT MAX(sequence) FROM item_changes), 0), (SELECT minimum_sequence FROM sync_retention) FROM sync_state"
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
         }
@@ -516,20 +720,35 @@ actor ItemDatabase {
         guard sqlite3_step(stmt) == SQLITE_ROW else {
             throw DatabaseError.readFailed("Missing sync state")
         }
-        return (columnString(stmt, 0), sqlite3_column_int64(stmt, 1))
+        return (columnString(stmt, 0), sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2))
+    }
+
+    func validateSyncAnchor(_ anchor: Data) throws {
+        let state = try syncState()
+        let parts = String(data: anchor, encoding: .utf8)?.split(separator: ":") ?? []
+        guard parts.count == 2, parts[0] == state.epoch,
+              let sequence = Int64(parts[1]), sequence >= state.minimum, sequence <= state.sequence else {
+            throw DatabaseError.expiredAnchor
+        }
     }
 
     /// Read the delta and its upper anchor in one actor turn, including durable tombstones.
     /// nil parent denotes the working set, which includes all known items.
-    func changes(since anchor: Data, parentOcId: String?) throws -> (updated: [ItemMetadata], deleted: [String], anchor: Data) {
+    func changes(since anchor: Data, parentOcId: String?, limit: Int = 500) throws -> (updated: [ItemMetadata], deleted: [String], anchor: Data, moreComing: Bool) {
+        // Another extension instance may compact the same journal. Keep validation
+        // and the bounded page in one SQLite transaction, not just one actor turn.
+        try transaction { try readChanges(since: anchor, parentOcId: parentOcId, limit: limit) }
+    }
+
+    private func readChanges(since anchor: Data, parentOcId: String?, limit: Int) throws -> (updated: [ItemMetadata], deleted: [String], anchor: Data, moreComing: Bool) {
         let state = try syncState()
         let parts = String(data: anchor, encoding: .utf8)?.split(separator: ":") ?? []
         guard parts.count == 2, parts[0] == state.epoch,
-              let sequence = Int64(parts[1]), sequence >= 0, sequence <= state.sequence else {
+              let sequence = Int64(parts[1]), sequence >= state.minimum, sequence <= state.sequence else {
             throw DatabaseError.expiredAnchor
         }
         var stmt: OpaquePointer?
-        let sql = "SELECT DISTINCT oc_id FROM item_changes WHERE sequence > ? AND (? IS NULL OR parent_oc_id = ?)"
+        let sql = "SELECT oc_id, MAX(sequence) AS last_sequence FROM item_changes WHERE sequence > ? AND (? IS NULL OR parent_oc_id = ?) AND sequence <= ? GROUP BY oc_id ORDER BY last_sequence LIMIT ?"
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
         }
@@ -542,10 +761,18 @@ actor ItemDatabase {
             sqlite3_bind_null(stmt, 2)
             sqlite3_bind_null(stmt, 3)
         }
+        sqlite3_bind_int64(stmt, 4, state.sequence)
+        sqlite3_bind_int64(stmt, 5, Int64(max(1, limit) + 1))
         var updated: [ItemMetadata] = []
         var deleted: [String] = []
+        var lastSequence = sequence
+        var count = 0
+        var moreComing = false
         var result = sqlite3_step(stmt)
         while result == SQLITE_ROW {
+            if count == max(1, limit) { moreComing = true; break }
+            count += 1
+            lastSequence = sqlite3_column_int64(stmt, 1)
             let identifier = columnString(stmt, 0)
             if let metadata = itemMetadata(ocId: identifier),
                parentOcId == nil || metadata.parentOcId == parentOcId {
@@ -555,10 +782,11 @@ actor ItemDatabase {
             }
             result = sqlite3_step(stmt)
         }
-        guard result == SQLITE_DONE else {
+        guard result == SQLITE_DONE || moreComing else {
             throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
         }
-        return (updated, deleted, Data("\(state.epoch):\(state.sequence)".utf8))
+        let upper = moreComing ? lastSequence : state.sequence
+        return (updated, deleted, Data("\(state.epoch):\(upper)".utf8), moreComing)
     }
 
     func allItems() throws -> [ItemMetadata] {

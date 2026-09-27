@@ -19,6 +19,15 @@ import OSLog
 class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     private let enumeratedItemIdentifier: NSFileProviderItemIdentifier
     private weak var fpExtension: FileProviderExtension?
+    private let operationLock = NSLock()
+    private var operations: [UUID: Task<Void, Never>] = [:]
+    private var invalidated = false
+    private static let pageSize = 500
+    private struct Page: Codable {
+        let container: String
+        let epoch: String
+        let after: String
+    }
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "eu.opencloud.desktop.FileProviderExt", category: "FileProviderEnumerator")
 
     init(enumeratedItemIdentifier: NSFileProviderItemIdentifier, domain: NSFileProviderDomain, fpExtension: FileProviderExtension) {
@@ -27,32 +36,37 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         super.init()
     }
 
-    func invalidate() {}
+    func invalidate() {
+        operationLock.lock()
+        invalidated = true
+        let tasks = Array(operations.values)
+        operationLock.unlock()
+        for task in tasks { task.cancel() }
+    }
 
-    private func waitForAuthentication(ext: FileProviderExtension) async throws {
-        let start = Date()
-        while !ext.isAuthenticated {
-            guard Date().timeIntervalSince(start) < 30 else {
-                throw NSFileProviderError(.notAuthenticated)
-            }
-            try await Task.sleep(nanoseconds: 500_000_000)
+    private func startOperation(_ operation: @escaping () async -> Void) {
+        let identifier = UUID()
+        operationLock.lock()
+        let task = Task {
+            await operation()
+            finishOperation(identifier)
         }
+        operations[identifier] = task
+        if invalidated { task.cancel() }
+        operationLock.unlock()
+    }
+
+    private func finishOperation(_ identifier: UUID) {
+        operationLock.lock()
+        operations.removeValue(forKey: identifier)
+        operationLock.unlock()
     }
 
     private func providerError(_ error: Error) -> Error {
         if case DatabaseError.expiredAnchor = error {
             return NSFileProviderError(.syncAnchorExpired)
         }
-        if let error = error as? WebDAVError {
-            switch error {
-            case .notAuthenticated: return NSFileProviderError(.notAuthenticated)
-            case .fileNotFound: return NSFileProviderError(.noSuchItem)
-            case .permissionDenied: return CocoaError(.fileReadNoPermission)
-            default: return NSFileProviderError(.serverUnreachable)
-            }
-        }
-        if error is NSFileProviderError { return error }
-        return NSFileProviderError(.cannotSynchronize)
+        return fileProviderError(error)
     }
 
     private func item(_ metadata: ItemMetadata) -> NSFileProviderItem {
@@ -78,15 +92,17 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
 
     private func loadDirectory(path: String, parent: String, webdav: WebDAVClient, database: ItemDatabase) async throws -> (items: [ItemMetadata], missing: [ItemMetadata]) {
         // Capture before the network request so concurrent local writes are not deleted.
+        try Task.checkCancellation()
         let previous = await database.childItems(parentOcId: parent)
         let started = Date()
         let response = try await webdav.listDirectory(path: path)
         var metadata: [ItemMetadata] = []
         for remote in response.dropFirst() {
+            try Task.checkCancellation()
             let merged = try await database.mergeServerMetadata(ItemMetadata(from: remote, parentOcId: parent), fetchedAfter: started)
             metadata.append(merged)
         }
-        let identifiers = Set(response.dropFirst().map { $0.ocId })
+        let identifiers = Set(metadata.map { $0.ocId })
         return (metadata, previous.filter { !identifiers.contains($0.ocId) })
     }
 
@@ -97,7 +113,10 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             // known folders before discarding its identity and materialization state.
             try await refreshWorkingSet(webdav: webdav, database: database)
         }
-        for missing in snapshot.missing { try await database.deleteIfUnchanged(missing) }
+        for missing in snapshot.missing {
+            try Task.checkCancellation()
+            try await database.deleteIfUnchanged(missing)
+        }
         return await database.childItems(parentOcId: parent)
     }
 
@@ -106,19 +125,27 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         // Opening another Finder window must not be required to discover their changes.
         let root = try await loadDirectory(path: "/", parent: ItemDatabase.rootContainerId, webdav: webdav, database: database)
         var missing = root.missing
-        let knownDirectories = try await database.allItems().filter { $0.isDirectory }
-        for directory in knownDirectories {
-            guard let current = await database.itemMetadata(ocId: directory.ocId) else { continue }
-            do {
-                let snapshot = try await loadDirectory(path: current.remotePath, parent: current.ocId, webdav: webdav, database: database)
-                missing.append(contentsOf: snapshot.missing)
-            } catch WebDAVError.fileNotFound {
-                missing.append(current)
+        var cursor: String?
+        repeat {
+            let page = try await database.itemsPage(parentOcId: nil, after: cursor, limit: Self.pageSize, directoriesOnly: true)
+            for directory in page.items {
+                try Task.checkCancellation()
+                guard let current = await database.itemMetadata(ocId: directory.ocId) else { continue }
+                do {
+                    let snapshot = try await loadDirectory(path: current.remotePath, parent: current.ocId, webdav: webdav, database: database)
+                    missing.append(contentsOf: snapshot.missing)
+                } catch WebDAVError.fileNotFound {
+                    missing.append(current)
+                }
             }
-        }
+            cursor = page.next
+        } while cursor != nil
         // Apply all moves before deletions, so moving a cached folder between known
         // parents keeps its descendants and their local state.
-        for item in missing { try await database.deleteIfUnchanged(item) }
+        for item in missing {
+            try Task.checkCancellation()
+            try await database.deleteIfUnchanged(item)
+        }
     }
 
     func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt page: NSFileProviderPage) {
@@ -126,28 +153,47 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             observer.finishEnumeratingWithError(NSFileProviderError(.notAuthenticated))
             return
         }
-        Task {
+        startOperation {
             do {
-                try await waitForAuthentication(ext: ext)
-                guard let webdav = ext.webdavClient, let database = ext.database else {
+                try Task.checkCancellation()
+                guard ext.isAuthenticated, let webdav = ext.webdavClient, let database = ext.database else {
                     throw NSFileProviderError(.notAuthenticated)
                 }
-                let metadata: [ItemMetadata]
-                switch enumeratedItemIdentifier {
-                case .trashContainer:
-                    metadata = []
-                case .workingSet:
-                    try await refreshWorkingSet(webdav: webdav, database: database)
-                    metadata = try await database.allItems()
-                default:
-                    let folder = try await directory(ext: ext, webdav: webdav, database: database)
-                    metadata = try await refreshDirectory(path: folder.path, parent: folder.parent, webdav: webdav, database: database)
+                let anchor = try await database.currentSyncAnchor()
+                let epoch = String(data: anchor, encoding: .utf8)!.components(separatedBy: ":")[0]
+                let initial = page.rawValue == NSFileProviderPage.initialPageSortedByName as Data || page.rawValue == NSFileProviderPage.initialPageSortedByDate as Data
+                let cursor: String?
+                if initial {
+                    cursor = nil
+                } else {
+                    guard let token = try? JSONDecoder().decode(Page.self, from: page.rawValue),
+                          token.container == self.enumeratedItemIdentifier.rawValue, token.epoch == epoch else {
+                        throw NSFileProviderError(.pageExpired)
+                    }
+                    cursor = token.after
                 }
-                observer.didEnumerate(metadata.map(item))
-                observer.finishEnumerating(upTo: nil)
+                let parent: String?
+                switch self.enumeratedItemIdentifier {
+                case .trashContainer:
+                    parent = NSFileProviderItemIdentifier.trashContainer.rawValue
+                case .workingSet:
+                    if initial { try await self.refreshWorkingSet(webdav: webdav, database: database) }
+                    parent = nil
+                default:
+                    let folder = try await self.directory(ext: ext, webdav: webdav, database: database)
+                    if initial { _ = try await self.refreshDirectory(path: folder.path, parent: folder.parent, webdav: webdav, database: database) }
+                    parent = folder.parent
+                }
+                let result = try await database.itemsPage(parentOcId: parent, after: cursor, limit: Self.pageSize)
+                try Task.checkCancellation()
+                let next = try result.next.map {
+                    NSFileProviderPage(try JSONEncoder().encode(Page(container: self.enumeratedItemIdentifier.rawValue, epoch: epoch, after: $0)))
+                }
+                observer.didEnumerate(result.items.map(self.item))
+                observer.finishEnumerating(upTo: next)
             } catch {
-                logger.error("Enumeration failed: \(error.localizedDescription)")
-                observer.finishEnumeratingWithError(providerError(error))
+                self.logger.error("Enumeration failed: \(error.localizedDescription)")
+                observer.finishEnumeratingWithError(self.providerError(error))
             }
         }
     }
@@ -157,32 +203,34 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             observer.finishEnumeratingWithError(NSFileProviderError(.notAuthenticated))
             return
         }
-        Task {
+        startOperation {
             do {
-                try await waitForAuthentication(ext: ext)
-                guard let webdav = ext.webdavClient, let database = ext.database else {
+                try Task.checkCancellation()
+                guard ext.isAuthenticated, let webdav = ext.webdavClient, let database = ext.database else {
                     throw NSFileProviderError(.notAuthenticated)
                 }
+                try await database.validateSyncAnchor(anchor.rawValue)
                 let parent: String?
-                switch enumeratedItemIdentifier {
+                switch self.enumeratedItemIdentifier {
                 case .trashContainer:
                     // Trash is empty, but still validate and preserve the database anchor.
                     parent = NSFileProviderItemIdentifier.trashContainer.rawValue
                 case .workingSet:
-                    try await refreshWorkingSet(webdav: webdav, database: database)
+                    try await self.refreshWorkingSet(webdav: webdav, database: database)
                     parent = nil
                 default:
-                    let folder = try await directory(ext: ext, webdav: webdav, database: database)
-                    _ = try await refreshDirectory(path: folder.path, parent: folder.parent, webdav: webdav, database: database)
+                    let folder = try await self.directory(ext: ext, webdav: webdav, database: database)
+                    _ = try await self.refreshDirectory(path: folder.path, parent: folder.parent, webdav: webdav, database: database)
                     parent = folder.parent
                 }
                 let changes = try await database.changes(since: anchor.rawValue, parentOcId: parent)
-                observer.didUpdate(changes.updated.map(item))
+                try Task.checkCancellation()
+                observer.didUpdate(changes.updated.map(self.item))
                 observer.didDeleteItems(withIdentifiers: changes.deleted.map { NSFileProviderItemIdentifier($0) })
-                observer.finishEnumeratingChanges(upTo: NSFileProviderSyncAnchor(changes.anchor), moreComing: false)
+                observer.finishEnumeratingChanges(upTo: NSFileProviderSyncAnchor(changes.anchor), moreComing: changes.moreComing)
             } catch {
-                logger.error("Change enumeration failed: \(error.localizedDescription)")
-                observer.finishEnumeratingWithError(providerError(error))
+                self.logger.error("Change enumeration failed: \(error.localizedDescription)")
+                observer.finishEnumeratingWithError(self.providerError(error))
             }
         }
     }
@@ -192,8 +240,9 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             completionHandler(nil)
             return
         }
-        Task {
+        startOperation {
             do {
+                try Task.checkCancellation()
                 completionHandler(NSFileProviderSyncAnchor(try await database.currentSyncAnchor()))
             } catch {
                 completionHandler(nil)

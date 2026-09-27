@@ -17,7 +17,9 @@
 #include "gui/opencloudguilib.h"
 #include "libsync/common/result.h"
 
+#include <QHash>
 #include <QObject>
+#include <QSet>
 #include <memory>
 
 namespace OCC {
@@ -52,6 +54,13 @@ namespace Mac {
         /// Disconnect existing domains before traditional folder sync can start.
         static Result<void, QString> prepareForFolderSync();
 
+        bool ready() const;
+        QString error() const;
+
+    Q_SIGNALS:
+        void statusChanged();
+
+    public:
         /**
          * @brief Get the domain manager.
          */
@@ -66,6 +75,10 @@ namespace Mac {
         void configureXPC();
 
     private:
+        Q_DISABLE_COPY_MOVE(FileProvider)
+        QHash<QString, QString> _errors;
+        QSet<QString> _registeredDomains;
+        QSet<QString> _authenticatedDomains;
         static FileProvider *_instance;
         explicit FileProvider(QObject *parent = nullptr);
 

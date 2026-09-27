@@ -14,6 +14,7 @@
 
 #include "gui/folderman.h"
 #include "macOS/fileprovider.h"
+#include "macOS/fileproviderdomainhistory.h"
 #include "macOS/fileproviderdomainmanager.h"
 #include "macOS/fileproviderxpc.h"
 
@@ -44,7 +45,6 @@ FileProvider *FileProvider::instance()
 FileProvider::FileProvider(QObject *parent)
     : QObject(parent)
 {
-    NSLog(@"OpenCloud: FileProvider::FileProvider() called");
     qCInfo(lcFileProvider) << "Initializing FileProvider integration";
 
     if (!FolderMan::instance()->useFileProvider()) {
@@ -57,8 +57,40 @@ FileProvider::FileProvider(QObject *parent)
     // Connect domain setup completion to XPC configuration
     connect(_domainManager.get(), &FileProviderDomainManager::domainSetupComplete,
             this, &FileProvider::configureXPC);
-    
-    // Start the domain manager
+
+    connect(_domainManager.get(), &FileProviderDomainManager::domainRegistered, this, [this](const QString &id) {
+        _registeredDomains.insert(id);
+        Q_EMIT statusChanged();
+    });
+    connect(_domainManager.get(), &FileProviderDomainManager::domainRemoved, this, [this](const QString &id) {
+        _registeredDomains.remove(id);
+        _authenticatedDomains.remove(id);
+        _errors.remove(QStringLiteral("native:") + id);
+        _errors.remove(QStringLiteral("xpc:") + id);
+        Q_EMIT statusChanged();
+    });
+    connect(_domainManager.get(), &FileProviderDomainManager::nativeError, this, [this](const QString &id, const QString &message) {
+        const auto key = QStringLiteral("native:") + id;
+        if (message.isEmpty()) {
+            _errors.remove(key);
+        } else {
+            _errors.insert(key, message);
+        }
+        Q_EMIT statusChanged();
+    });
+    connect(_xpc.get(), &FileProviderXPC::domainStatusChanged, this, [this](const QString &id, const QString &message) {
+        const auto key = QStringLiteral("xpc:") + id;
+        if (message.isEmpty()) {
+            _errors.remove(key);
+            if (id != QLatin1String("discovery") && id != QLatin1String("connection")) {
+                _authenticatedDomains.insert(id);
+            }
+        } else {
+            _errors.insert(key, message);
+            _authenticatedDomains.remove(id);
+        }
+        Q_EMIT statusChanged();
+    });
     _domainManager->start();
 }
 
@@ -84,7 +116,10 @@ bool FileProvider::fileProviderAvailable()
 
 Result<void, QString> FileProvider::prepareForFolderSync()
 {
-    if (!fileProviderAvailable()) {
+    // Native domains survive a missing or incompatible bundled extension.
+    // Query macOS regardless of bundle availability before allowing legacy sync.
+    if (@available(macOS 11.0, *)) {
+    } else {
         return {};
     }
 
@@ -99,12 +134,30 @@ Result<void, QString> FileProvider::prepareForFolderSync()
     QObject::connect(&watcher, &QFutureWatcher<QString>::finished, &loop, &QEventLoop::quit);
     QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
     watcher.setFuture(promise->future());
+    const bool allowMissingProvider = !fileProviderAvailable() && canStartFolderSyncWithoutFileProvider();
     NSString *reason = tr("Traditional folder sync is enabled. Switch to on-demand files in Settings to reconnect.").toNSString();
     [NSFileProviderManager getDomainsWithCompletionHandler:^(NSArray<NSFileProviderDomain *> *domains, NSError *error) {
         if (error) {
-            promise->addResult(QString::fromNSString(error.localizedDescription));
+            bool providerAbsent = [error.domain isEqualToString:NSFileProviderErrorDomain] && error.code == NSFileProviderErrorProviderNotFound;
+            if (@available(macOS 14.1, *)) {
+                providerAbsent = providerAbsent
+                    || ([error.domain isEqualToString:NSFileProviderErrorDomain] && error.code == NSFileProviderErrorApplicationExtensionNotFound);
+            }
+            if (!allowMissingProvider || !providerAbsent) {
+                promise->addResult(providerAbsent ? tr("Previous on-demand domains could not be checked. Restore a compatible FileProvider extension, then "
+                                                       "switch to traditional folder sync before replacing it.")
+                                                  : QString::fromNSString(error.localizedDescription));
+            }
             promise->finish();
             return;
+        }
+        QStringList domainIds;
+        for (NSFileProviderDomain *domain in domains) {
+            domainIds.append(QString::fromNSString(domain.identifier));
+        }
+        rememberFileProviderDomains(domainIds);
+        if (!domainIds.isEmpty()) {
+            ConfigFile::makeQSettings().setValue(QStringLiteral("FileProvider/AllDomainsDisconnected"), false);
         }
         dispatch_group_t group = dispatch_group_create();
         for (NSFileProviderDomain *domain in domains) {
@@ -134,7 +187,20 @@ Result<void, QString> FileProvider::prepareForFolderSync()
     if (!errors.isEmpty()) {
         return QStringList(errors).join(QLatin1Char('\n'));
     }
+    ConfigFile::makeQSettings().setValue(QStringLiteral("FileProvider/AllDomainsDisconnected"), true);
     return {};
+}
+
+bool FileProvider::ready() const
+{
+    return _errors.isEmpty() && !_registeredDomains.isEmpty() && _registeredDomains == _authenticatedDomains;
+}
+
+QString FileProvider::error() const
+{
+    auto messages = _errors.values();
+    messages.removeDuplicates();
+    return messages.join(QLatin1Char('\n'));
 }
 
 FileProviderDomainManager *FileProvider::domainManager() const
@@ -158,9 +224,7 @@ void FileProvider::configureXPC()
     // Give the system a moment to fully register the domains.
     // connectToFileProviderDomains is non-blocking and auto-authenticates
     // when connections are established.
-    QTimer::singleShot(1000, this, [this]() {
-        _xpc->connectToFileProviderDomains();
-    });
+    QTimer::singleShot(std::chrono::seconds(1), this, [this]() { _xpc->connectToFileProviderDomains(); });
 }
 
 } // namespace Mac
