@@ -14,13 +14,17 @@
 
 #pragma once
 
+#include "fileprovidersyncstatus.h"
 #include "gui/opencloudguilib.h"
 #include "libsync/common/result.h"
 
 #include <QHash>
 #include <QObject>
 #include <QSet>
+#include <QUuid>
 #include <memory>
+
+class TestFileProviderLifecycle;
 
 namespace OCC {
 
@@ -56,6 +60,7 @@ namespace Mac {
 
         bool ready() const;
         QString error() const;
+        QString syncStatusText(const QUuid &account = {}) const;
 
     Q_SIGNALS:
         void statusChanged();
@@ -79,13 +84,15 @@ namespace Mac {
         QHash<QString, QString> _errors;
         QSet<QString> _registeredDomains;
         QSet<QString> _authenticatedDomains;
+        QHash<QString, FileProviderSyncStatus> _syncStatus;
         static FileProvider *_instance;
-        explicit FileProvider(QObject *parent = nullptr);
+        explicit FileProvider(QObject *parent = nullptr, const QString &appGroupIdentifier = {});
 
         std::unique_ptr<FileProviderDomainManager> _domainManager;
         std::unique_ptr<FileProviderXPC> _xpc;
 
         friend class OCC::Application;
+        friend class ::TestFileProviderLifecycle;
     };
 
 } // namespace Mac

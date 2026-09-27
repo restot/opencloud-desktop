@@ -15,6 +15,7 @@
 #pragma once
 
 #include <QHash>
+#include <QJsonObject>
 #include <QObject>
 #include <QSet>
 #include <functional>
@@ -72,14 +73,17 @@ namespace Mac {
     public:
         void clearAccountConfiguration(const QString &domainIdentifier, std::function<void(bool)> completion);
         void closeConnection(const QString &domainIdentifier);
+        void refreshSyncStatus();
 
     Q_SIGNALS:
         void domainConnected(const QString &domainIdentifier);
+        void domainReconnecting(const QString &domainIdentifier);
         void domainStatusChanged(const QString &domainIdentifier, const QString &error);
+        void syncStatusReceived(const QString &domainIdentifier, const QJsonObject &status, const QString &error);
 
     private Q_SLOTS:
         void slotAccountStateChanged(AccountState::State state);
-        void reconnectAfterInvalidation();
+        void reconnectAfterInvalidation(const QString &domainIdentifier);
         void refreshCredentials();
 
     private:
@@ -90,8 +94,13 @@ namespace Mac {
 
         QHash<QString, int> _authenticationRetries;
         QHash<QString, std::shared_ptr<bool>> _configurationRequests;
+        QHash<QString, std::shared_ptr<bool>> _statusRequests;
+        QSet<QString> _statusDomains;
         QString _appGroupIdentifier;
         QHash<QString, void *> _connections;
+        // The native service and manager own the extension request's lifetime.
+        QHash<QString, void *> _serviceLeases;
+        QHash<QString, void *> _managerLeases;
         QSet<QString> _pendingDomains;
         QHash<QString, std::shared_ptr<bool>> _connectionRequests;
         bool _discoveryPending = false;

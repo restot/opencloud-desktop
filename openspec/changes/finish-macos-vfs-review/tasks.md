@@ -15,4 +15,4 @@
 - [x] Run integrated CTest and Swift suites after the final edits.
 - [x] Build both universal extensions and the desktop app.
 - [x] Run signed XPC, Keychain, revocation, and Finder I/O tests with isolated data.
-- [ ] Update the review report and issue states, commit, and push.
+- [x] Update the review report and issue states, commit, and push.

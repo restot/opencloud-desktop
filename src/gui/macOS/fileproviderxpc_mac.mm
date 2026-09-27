@@ -21,6 +21,7 @@
 #include <QDir>
 #include <QFileInfo>
 
+#include <QJsonDocument>
 #include <QLoggingCategory>
 #include <QTimer>
 
@@ -43,7 +44,7 @@ namespace {
     NSString *const clientCommunicationServiceName = @"eu.opencloud.desktop.ClientCommunicationService";
 }
 
-static NSUserDefaults *credentialDefaults(const QString &appGroupIdentifier)
+static NSString *credentialSuiteIdentifier(const QString &appGroupIdentifier)
 {
     NSURL *extensionURL = [NSBundle.mainBundle.builtInPlugInsURL URLByAppendingPathComponent:@"FileProviderExt.appex"];
     NSString *suite = appGroupIdentifier.isEmpty() ? [[NSBundle bundleWithURL:extensionURL] objectForInfoDictionaryKey:@"AppGroupIdentifier"]
@@ -53,7 +54,34 @@ static NSUserDefaults *credentialDefaults(const QString &appGroupIdentifier)
         suite = (directory.absolutePath().contains(QStringLiteral("/Group Containers/")) ? directory.dirName() : OCC::Theme::instance()->orgDomainName())
                     .toNSString();
     }
-    return [[NSUserDefaults alloc] initWithSuiteName:suite];
+    return suite;
+}
+
+static bool persistCredentialState(const QString &appGroupIdentifier, NSDictionary<NSString *, id> *values)
+{
+    NSString *identifier = credentialSuiteIdentifier(appGroupIdentifier);
+    if (!identifier.length) {
+        return false;
+    }
+    const auto suite = (__bridge CFStringRef)identifier;
+    // NSUserDefaults.synchronize also visits AnyUser/ByHost domains. In a macOS
+    // app group it can fail there even after our current-user values were saved.
+    // Flush and verify exactly the domain shared with the extension instead.
+    CFPreferencesSetMultiple((__bridge CFDictionaryRef)values, nullptr, suite, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    if (!CFPreferencesSynchronize(suite, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)) {
+        return false;
+    }
+    for (NSString *key in values) {
+        const auto stored = CFPreferencesCopyValue((__bridge CFStringRef)key, suite, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+        const bool matches = stored && [(__bridge id)stored isEqual:values[key]];
+        if (stored) {
+            CFRelease(stored);
+        }
+        if (!matches) {
+            return false;
+        }
+    }
+    return true;
 }
 
 namespace OCC {
@@ -72,6 +100,10 @@ FileProviderXPC::FileProviderXPC(QObject *parent, const QString &appGroupIdentif
     _credentialRefreshTimer->setInterval(std::chrono::minutes(4));
     connect(_credentialRefreshTimer, &QTimer::timeout, this, &FileProviderXPC::refreshCredentials);
     _credentialRefreshTimer->start();
+    auto *statusTimer = new QTimer(this);
+    statusTimer->setInterval(std::chrono::seconds(2));
+    connect(statusTimer, &QTimer::timeout, this, &FileProviderXPC::refreshSyncStatus);
+    statusTimer->start();
     auto watchAccount = [this](const AccountStatePtr &state) {
         connect(state.data(), &AccountState::stateChanged, this, &FileProviderXPC::slotAccountStateChanged, Qt::UniqueConnection);
         const auto accountId = state->account()->uuid();
@@ -102,7 +134,17 @@ void FileProviderXPC::clearConnections()
         (void)(__bridge_transfer id)ptr;
     }
     _clientCommServices.clear();
+    for (void *ptr : std::as_const(_serviceLeases)) {
+        (void)(__bridge_transfer NSFileProviderService *)ptr;
+    }
+    _serviceLeases.clear();
+    for (void *ptr : std::as_const(_managerLeases)) {
+        (void)(__bridge_transfer NSFileProviderManager *)ptr;
+    }
+    _managerLeases.clear();
     _configurationRequests.clear();
+    _statusRequests.clear();
+    _statusDomains.clear();
     _authenticationRetries.clear();
     _connectionRequests.clear();
     _pendingDomains.clear();
@@ -150,6 +192,11 @@ void FileProviderXPC::connectToFileProviderDomains()
                 auto failed = ^(NSError *failure) {
                     dispatch_async(dispatch_get_main_queue(), ^{
                         if (guard && guard->_connectionRequests.value(domainId) == request) {
+                            if (guard->_connections.contains(domainId) && [failure.domain isEqualToString:NSCocoaErrorDomain]
+                                && (failure.code == NSXPCConnectionInterrupted || failure.code == NSXPCConnectionInvalid)) {
+                                guard->reconnectAfterInvalidation(domainId);
+                                return;
+                            }
                             guard->closeConnection(domainId);
                             qCWarning(lcFileProviderXPC)
                                 << "FileProvider connection failed for" << domainId << QString::fromNSString(failure.localizedDescription);
@@ -177,7 +224,7 @@ void FileProviderXPC::connectToFileProviderDomains()
                             dispatch_async(dispatch_get_main_queue(), ^{
                                 if (guard && guard->_connectionRequests.value(domainId) == request) {
                                     guard->_pendingDomains.remove(domainId);
-                                    guard->reconnectAfterInvalidation();
+                                    guard->reconnectAfterInvalidation(domainId);
                                 }
                             });
                         };
@@ -204,6 +251,8 @@ void FileProviderXPC::connectToFileProviderDomains()
                                     return;
                                 }
                                 guard->_connections.insert(domainId, (__bridge_retained void *)connection);
+                                guard->_serviceLeases.insert(domainId, (__bridge_retained void *)service);
+                                guard->_managerLeases.insert(domainId, (__bridge_retained void *)manager);
                                 guard->_clientCommServices.insert(domainId, (__bridge_retained void *)proxy);
                                 Q_EMIT guard->domainConnected(domainId);
                                 guard->authenticateFileProviderDomain(domainId);
@@ -322,19 +371,13 @@ void FileProviderXPC::authenticateFileProviderDomain(QString domainIdentifier)
 
     NSObject<ClientCommunicationProtocol> *service = (__bridge NSObject<ClientCommunicationProtocol> *)servicePtr;
 
-    qCInfo(lcFileProviderXPC) << "Sending credentials to domain:" << domainIdentifier
-                              << "user:" << QString::fromNSString(user)
-                              << "server:" << QString::fromNSString(serverUrl)
-                              << "davPath:" << QString::fromNSString(davPath)
-                              << "authType:" << QString::fromNSString(authType);
-
-    NSUserDefaults *defaults = credentialDefaults(_appGroupIdentifier);
     NSString *generation = QUuid::createUuid().toString(QUuid::WithoutBraces).toNSString();
-    [defaults setObject:generation forKey:[@"fp_config_generation_" stringByAppendingString:domainIdentifier.toNSString()]];
-    if (![defaults synchronize]) {
+    if (!persistCredentialState(_appGroupIdentifier, @{[@"fp_config_generation_" stringByAppendingString:domainIdentifier.toNSString()] : generation})) {
+        qCWarning(lcFileProviderXPC) << "Could not persist the credential generation for domain:" << domainIdentifier;
         Q_EMIT domainStatusChanged(domainIdentifier, tr("Could not persist the on-demand credential generation."));
         return;
     }
+    qCInfo(lcFileProviderXPC) << "Sending credentials to domain:" << domainIdentifier;
     const QPointer<FileProviderXPC> guard(this);
     const auto completed = std::make_shared<bool>(false);
     _configurationRequests.insert(domainIdentifier, completed);
@@ -352,9 +395,15 @@ void FileProviderXPC::authenticateFileProviderDomain(QString domainIdentifier)
                                 guard->_configurationRequests.remove(domainIdentifier);
                                 const auto account = FileProviderDomainManager::accountStateFromDomainIdentifier(domainIdentifier);
                                 if (account && !account->isSignedOut()) {
+                                    if (error) {
+                                        qCWarning(lcFileProviderXPC) << "Provider rejected account configuration for domain:" << domainIdentifier
+                                                                     << "error domain:" << QString::fromNSString(error.domain) << "code:" << error.code;
+                                    }
                                     Q_EMIT guard->domainStatusChanged(domainIdentifier, error ? QString::fromNSString(error.localizedDescription) : QString());
                                     if (!error) {
                                         guard->_authenticationRetries.remove(domainIdentifier);
+                                        guard->_statusDomains.insert(domainIdentifier);
+                                        guard->refreshSyncStatus();
                                     } else if (guard->_authenticationRetries.value(domainIdentifier) < 3) {
                                         ++guard->_authenticationRetries[domainIdentifier];
                                         QTimer::singleShot(std::chrono::seconds(1), guard, [guard, domainIdentifier] {
@@ -381,6 +430,8 @@ void FileProviderXPC::unauthenticateFileProviderDomain(const QString &domainIden
 
 void FileProviderXPC::closeConnection(const QString &domainIdentifier)
 {
+    _statusRequests.remove(domainIdentifier);
+    _statusDomains.remove(domainIdentifier);
     _configurationRequests.remove(domainIdentifier);
     _authenticationRetries.remove(domainIdentifier);
     _connectionRequests.remove(domainIdentifier);
@@ -391,7 +442,14 @@ void FileProviderXPC::closeConnection(const QString &domainIdentifier)
     if (void *ptr = _connections.take(domainIdentifier)) {
         NSXPCConnection *connection = (__bridge_transfer NSXPCConnection *)ptr;
         connection.invalidationHandler = nil;
+        connection.interruptionHandler = nil;
         [connection invalidate];
+    }
+    if (void *ptr = _serviceLeases.take(domainIdentifier)) {
+        (void)(__bridge_transfer NSFileProviderService *)ptr;
+    }
+    if (void *ptr = _managerLeases.take(domainIdentifier)) {
+        (void)(__bridge_transfer NSFileProviderManager *)ptr;
     }
 }
 
@@ -407,11 +465,14 @@ void FileProviderXPC::authenticateAccountDomains(const QUuid &account)
 
 Result<void, QString> FileProviderXPC::recordAccountRemoval(const QString &domainIdentifier, const QString &appGroupIdentifier)
 {
-    NSUserDefaults *defaults = credentialDefaults(appGroupIdentifier);
-    [defaults setObject:QUuid::createUuid().toString(QUuid::WithoutBraces).toNSString()
-                 forKey:[@"fp_config_generation_" stringByAppendingString:domainIdentifier.toNSString()]];
-    [defaults setBool:YES forKey:[@"fp_removed_domain_" stringByAppendingString:domainIdentifier.toNSString()]];
-    if (![defaults synchronize]) {
+    if (!persistCredentialState(
+            appGroupIdentifier, @{
+                [@"fp_config_generation_" stringByAppendingString:domainIdentifier.toNSString()] : QUuid::createUuid()
+                    .toString(QUuid::WithoutBraces)
+                    .toNSString(),
+                [@"fp_removed_domain_" stringByAppendingString:domainIdentifier.toNSString()] : @YES
+            })) {
+        qCWarning(lcFileProviderXPC) << "Could not persist credential cleanup for domain:" << domainIdentifier;
         return tr("Could not persist credential cleanup for on-demand domain %1.").arg(domainIdentifier);
     }
     return {};
@@ -419,6 +480,8 @@ Result<void, QString> FileProviderXPC::recordAccountRemoval(const QString &domai
 
 void FileProviderXPC::clearAccountConfiguration(const QString &domainIdentifier, std::function<void(bool)> completion)
 {
+    _statusRequests.remove(domainIdentifier);
+    _statusDomains.remove(domainIdentifier);
     const bool pending = _cleanupCallbacks.contains(domainIdentifier);
     _configurationRequests.remove(domainIdentifier);
     _authenticationRetries.remove(domainIdentifier);
@@ -460,9 +523,18 @@ void FileProviderXPC::clearAccountConfiguration(const QString &domainIdentifier,
         }
     };
     NSObject<ClientCommunicationProtocol> *service = (__bridge NSObject<ClientCommunicationProtocol> *)ptr;
-    NSUserDefaults *defaults = credentialDefaults(_appGroupIdentifier);
-    NSString *generation = [defaults stringForKey:[@"fp_config_generation_" stringByAppendingString:domainIdentifier.toNSString()]];
-    [service removeAccountConfigWithGeneration:generation
+    const auto storedGeneration = CFPreferencesCopyValue((__bridge CFStringRef)[@"fp_config_generation_" stringByAppendingString:domainIdentifier.toNSString()],
+        (__bridge CFStringRef)credentialSuiteIdentifier(_appGroupIdentifier), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    const QString generation =
+        storedGeneration && CFGetTypeID(storedGeneration) == CFStringGetTypeID() ? QString::fromNSString((__bridge NSString *)storedGeneration) : QString();
+    if (storedGeneration) {
+        CFRelease(storedGeneration);
+    }
+    if (generation.isEmpty()) {
+        finish(false);
+        return;
+    }
+    [service removeAccountConfigWithGeneration:generation.toNSString()
                              completionHandler:^(NSError *error) { dispatch_async(dispatch_get_main_queue(), ^{ finish(error == nil); }); }];
     QTimer::singleShot(std::chrono::seconds(3), this, [finish] { finish(false); });
 }
@@ -540,19 +612,18 @@ void FileProviderXPC::slotAccountStateChanged(AccountState::State state)
     }
 }
 
-void FileProviderXPC::reconnectAfterInvalidation()
+void FileProviderXPC::reconnectAfterInvalidation(const QString &domainIdentifier)
 {
+    // macOS can retire a service connection while the provider remains healthy.
+    // Invalidate only this domain's readiness; actual retry failures still report
+    // errors, and errors already received from the provider remain visible.
+    closeConnection(domainIdentifier);
+    Q_EMIT domainReconnecting(domainIdentifier);
+    qCInfo(lcFileProviderXPC) << "XPC connection invalidated for domain:" << domainIdentifier;
     if (_reconnectPending) {
         return;
     }
     _reconnectPending = true;
-
-    qCInfo(lcFileProviderXPC) << "XPC connection invalidated, scheduling reconnection in 3 seconds";
-
-    for (const auto &domainId : _clientCommServices.keys()) {
-        Q_EMIT domainStatusChanged(domainId, tr("The on-demand provider is reconnecting."));
-    }
-    clearConnections();
 
     // Delay to allow the new extension process to start.
     // connectToFileProviderDomains is non-blocking and auto-authenticates
@@ -562,6 +633,47 @@ void FileProviderXPC::reconnectAfterInvalidation()
         qCInfo(lcFileProviderXPC) << "Reconnecting to FileProvider domains after invalidation";
         connectToFileProviderDomains();
     });
+}
+
+void FileProviderXPC::refreshSyncStatus()
+{
+    const QPointer<FileProviderXPC> guard(this);
+    for (const auto &domainId : std::as_const(_statusDomains)) {
+        if (_statusRequests.contains(domainId) || _cleanupCallbacks.contains(domainId)) {
+            continue;
+        }
+        void *ptr = _clientCommServices.value(domainId);
+        if (!ptr) {
+            continue;
+        }
+        const auto request = std::make_shared<bool>(false);
+        _statusRequests.insert(domainId, request);
+        const QString identifier = domainId; // Own the value captured by Objective-C blocks.
+        NSObject<ClientCommunicationProtocol> *service = (__bridge NSObject<ClientCommunicationProtocol> *)ptr;
+        [service getSyncStatusWithCompletionHandler:^(NSDictionary<NSString *, id> *status, NSError *error) {
+            // Copy the JSON bytes before leaving the XPC callback queue.
+            NSError *serializationError = nil;
+            NSData *data = status && [NSJSONSerialization isValidJSONObject:status]
+                ? [NSJSONSerialization dataWithJSONObject:status options:0 error:&serializationError]
+                : nil;
+            const QByteArray bytes = data ? QByteArray(static_cast<const char *>(data.bytes), data.length) : QByteArray();
+            const QString message =
+                error ? QString::fromNSString(error.localizedDescription) : (!data ? tr("The on-demand provider returned an invalid sync status.") : QString());
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!guard || guard->_statusRequests.value(identifier) != request) {
+                    return;
+                }
+                guard->_statusRequests.remove(identifier);
+                Q_EMIT guard->syncStatusReceived(identifier, QJsonDocument::fromJson(bytes).object(), message);
+            });
+        }];
+        QTimer::singleShot(std::chrono::seconds(5), this, [this, identifier, request] {
+            if (_statusRequests.value(identifier) == request) {
+                _statusRequests.remove(identifier);
+                Q_EMIT syncStatusReceived(identifier, {}, tr("The on-demand sync status is unavailable."));
+            }
+        });
+    }
 }
 
 void FileProviderXPC::refreshCredentials()

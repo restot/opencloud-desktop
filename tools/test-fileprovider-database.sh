@@ -8,6 +8,7 @@ xcrun swiftc -parse-as-library \
   "$sources/WebDAV/WebDAVItem.swift" \
   "$sources/Database/ItemMetadata.swift" \
   "$sources/Database/ItemDatabase.swift" \
+  "$sources/WebDAV/TransferProgressDelegate.swift" \
   "$sources/WebDAV/WebDAVClient.swift" \
   "$sources/WebDAV/WebDAVXMLParser.swift" \
   "$repo_root/test/macos/test_fileprovider_database.swift" \
@@ -18,6 +19,8 @@ xcrun swiftc -parse-as-library \
   "$sources/WebDAV/WebDAVItem.swift" \
   "$sources/Database/ItemMetadata.swift" \
   "$sources/Database/ItemDatabase.swift" \
+  "$sources/FileProviderSyncStatus.swift" \
+  "$sources/FileProviderStatusRecovery.swift" \
   "$sources/FileProviderItem.swift" \
   "$sources/FileProviderEnumerator.swift" \
   "$repo_root/test/macos/test_fileprovider_enumerator.swift" \

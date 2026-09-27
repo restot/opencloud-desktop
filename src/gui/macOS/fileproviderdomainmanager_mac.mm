@@ -129,13 +129,33 @@ public:
         const auto account = accountState->account();
         const bool personal = space->drive().getDriveType() == QLatin1String("personal");
         const QString domainId = fileProviderDomainIdentifier(account->uuid(), space->id(), personal);
+        const auto davPath = space->webdavUrl().path();
+        const auto spacesPrefix = davPath.lastIndexOf(QLatin1String("/dav/spaces/"));
+        auto spaceComponent = spacesPrefix < 0 ? QString() : davPath.mid(spacesPrefix + 12);
+        if (spaceComponent.endsWith(QLatin1Char('/'))) {
+            spaceComponent.chop(1);
+        }
+        // Shares is a virtual aggregation of other spaces. Its DAV root is
+        // browsable, but it has no independent recycle bin or search scope.
+        const bool supportsSearch =
+            space->drive().getDriveType() != QLatin1String("virtual") && !spaceComponent.isEmpty() && !spaceComponent.contains(QLatin1Char('/'));
         if (_registeredDomains.contains(domainId)) {
             if (accountState->isSignedOut()) {
                 disconnectDomain(domainId, FileProviderDomainManager::tr("You have been signed out."));
-            } else {
-                reconnectDomain(domainId, owner);
+                return;
             }
-            return;
+            NSFileProviderDomain *existing = _registeredDomains.value(domainId);
+            bool capabilitiesCurrent = true;
+            if (@available(macOS 26.0, *)) {
+                capabilitiesCurrent = existing.supportsStringSearchRequest == supportsSearch;
+            }
+            if (@available(macOS 13.0, *)) {
+                capabilitiesCurrent &= existing.supportsSyncingTrash == supportsSearch;
+            }
+            if (capabilitiesCurrent) {
+                reconnectDomain(domainId, owner);
+                return;
+            }
         }
         if (_pendingDomains.contains(domainId) || accountState->isSignedOut()) {
             return;
@@ -153,6 +173,12 @@ public:
                                          : QStringLiteral("%1 - %2").arg(space->displayName(), domainDisplayNameFromAccount(account.get())))
                                    .toNSString()];
         domain.hidden = NO;
+        if (@available(macOS 26.0, *)) {
+            domain.supportsStringSearchRequest = supportsSearch;
+        }
+        if (@available(macOS 13.0, *)) {
+            domain.supportsSyncingTrash = supportsSearch;
+        }
         const QPointer<FileProviderDomainManager> guard(owner);
         [NSFileProviderManager addDomain:domain
                        completionHandler:^(NSError *error) {

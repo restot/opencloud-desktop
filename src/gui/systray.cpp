@@ -125,14 +125,12 @@ void Systray::slotComputeOverallSyncStatus()
         const auto error = provider->error();
         if (!error.isEmpty()) {
             setIcon(getIconFromStatus(SyncResult::Error));
-            setToolTip(tr("On-demand files need attention: %1").arg(error));
         } else if (!provider->ready()) {
             setIcon(getIconFromStatus(SyncResult::SyncRunning));
-            setToolTip(tr("Connecting on-demand files…"));
         } else {
             setIcon(getIconFromStatus(SyncResult::Success));
-            setToolTip(tr("On-demand files in Finder"));
         }
+        setToolTip(provider->syncStatusText());
 #endif
         return;
     } else if (allPaused) {
@@ -169,6 +167,30 @@ void Systray::computeContextMenu()
     auto *menu = new QMenu(Theme::instance()->appNameGUI());
 
     menu->addAction(Theme::instance()->applicationIcon(), tr("Show %1").arg(Theme::instance()->appNameGUI()), ocApp(), &Application::showSettings);
+#ifdef Q_OS_MAC
+    if (FolderMan::instance()->useFileProvider()) {
+        auto *status = menu->addMenu(tr("On-demand sync"));
+        auto *provider = Mac::FileProvider::instance();
+        auto updateStatus = [status, provider] {
+            const auto lines = provider->syncStatusText().split(QLatin1Char('\n'));
+            auto actions = status->actions();
+            while (actions.size() < lines.size()) {
+                auto *action = status->addAction(QString());
+                action->setEnabled(false);
+                actions.append(action);
+            }
+            while (actions.size() > lines.size()) {
+                delete actions.takeLast();
+            }
+            for (qsizetype index = 0; index < lines.size(); ++index) {
+                actions.at(index)->setText(lines.at(index));
+            }
+        };
+        connect(provider, &Mac::FileProvider::statusChanged, status, updateStatus);
+        updateStatus();
+        menu->addSeparator();
+    }
+#endif
     auto *pauseResume = new QAction(menu);
     pauseResume->setVisible(!FolderMan::instance()->useFileProvider());
     auto updatePauseResumeAction = [pauseResume] {

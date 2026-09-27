@@ -101,6 +101,12 @@ import UniformTypeIdentifiers
         return Self.domainStates[domain.identifier.rawValue]?.recentDownloadHashes.removeValue(forKey: identifier)
     }
 
+    var supportsTrash: Bool {
+        WebDAVClient.supportsTrashPath(readState(\.davPath) ?? "")
+    }
+
+    lazy var syncStatus = FileProviderSyncStatus.shared(domain: domain, suiteName: appGroupIdentifier)
+
     // Item database for caching
     private(set) var database: ItemDatabase?
     
@@ -258,8 +264,43 @@ import UniformTypeIdentifiers
     private var removalKey: String { "fp_removed_domain_" + domain.identifier.rawValue }
     private var generationKey: String { "fp_config_generation_" + domain.identifier.rawValue }
 
+    private func persistedCredentialState() throws -> [String: Any] {
+        let suite = appGroupIdentifier as CFString
+        guard CFPreferencesSynchronize(suite, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        return CFPreferencesCopyMultiple(nil, suite, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String: Any] ?? [:]
+    }
+
+    private func credentialGenerationIsCurrent(_ generation: String) -> Bool {
+        guard let values = try? persistedCredentialState() else { return false }
+        return values[generationKey] as? String == generation && values[removalKey] as? Bool != true
+    }
+
+    private func persistCredentialState(_ values: [String: Any], removing keys: [String] = []) throws {
+        let suite = appGroupIdentifier as CFString
+        // App-group preferences are shared across the host and extension for
+        // this user. NSUserDefaults.synchronize also visits unsupported scopes.
+        CFPreferencesSetMultiple(values as CFDictionary, keys as CFArray, suite,
+                                 kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+        guard CFPreferencesSynchronize(suite, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        for (key, value) in values {
+            guard let stored = CFPreferencesCopyValue(key as CFString, suite, kCFPreferencesCurrentUser,
+                                                      kCFPreferencesAnyHost) as? NSObject,
+                  stored.isEqual(value) else { throw CocoaError(.fileWriteUnknown) }
+        }
+        for key in keys {
+            guard CFPreferencesCopyValue(key as CFString, suite, kCFPreferencesCurrentUser,
+                                         kCFPreferencesAnyHost) == nil else { throw CocoaError(.fileWriteUnknown) }
+        }
+    }
+
     private var hasPendingRemoval: Bool {
-        readState(\.isRemoving) || UserDefaults(suiteName: appGroupIdentifier)?.bool(forKey: removalKey) == true
+        if readState(\.isRemoving) { return true }
+        guard let values = try? persistedCredentialState() else { return true }
+        return values[removalKey] as? Bool == true
     }
 
     private func markAuthenticationExpired(for client: WebDAVClient) {
@@ -363,7 +404,13 @@ import UniformTypeIdentifiers
 
     /// Recover an uncached item using the durable identity index or server IDs.
     func resolveItemFromServer(identifier: NSFileProviderItemIdentifier, webdav: WebDAVClient, database: ItemDatabase) async throws -> ItemMetadata? {
-        try await database.resolveItem(identifier: identifier.rawValue, webdav: webdav)
+        do {
+            if let trashed = try await FileProviderTrash.resolve(identifier: identifier.rawValue, webdav: webdav, database: database) {
+                return trashed
+            }
+        } catch WebDAVError.fileNotFound {}
+        catch let error as CocoaError where error.code == .featureUnsupported {}
+        return try await database.resolveItem(identifier: identifier.rawValue, webdav: webdav)
     }
 
     // MARK: - NSFileProviderReplicatedExtension Protocol
@@ -376,7 +423,7 @@ import UniformTypeIdentifiers
         // Handle special containers
         switch identifier {
         case .rootContainer:
-            completionHandler(FileProviderItem.rootContainer(), nil)
+            completionHandler(FileProviderItem.rootContainer(supportsCreating: !WebDAVClient.isVirtualSharesPath(readState(\.davPath) ?? "")), nil)
             progress.completedUnitCount = 1
             return progress
         case .trashContainer:
@@ -419,7 +466,7 @@ import UniformTypeIdentifiers
                     parentId = NSFileProviderItemIdentifier(metadata.parentOcId)
                 }
 
-                let item = FileProviderItem(metadata: metadata, parentItemIdentifier: parentId)
+                let item = FileProviderItem(metadata: metadata, parentItemIdentifier: parentId, supportsTrash: supportsTrash)
                 completionHandler(item, nil)
             } else {
                 completionHandler(nil, NSError.fileProviderErrorForNonExistentItem(withIdentifier: identifier))
@@ -450,10 +497,17 @@ import UniformTypeIdentifiers
             ? NSFileProviderItemIdentifier.rootContainer : NSFileProviderItemIdentifier(updated.parentOcId)
         if let hash = SHA256.hash(contentsOf: tempFile) { recordDownloadHash(hash, for: metadata.ocId) }
         delivered = true
-        return (tempFile, FileProviderItem(metadata: updated, parentItemIdentifier: parent))
+        return (tempFile, FileProviderItem(metadata: updated, parentItemIdentifier: parent, supportsTrash: supportsTrash))
     }
 
     func fetchContents(for itemIdentifier: NSFileProviderItemIdentifier, version requestedVersion: NSFileProviderItemVersion?, request: NSFileProviderRequest, completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void) -> Progress {
+        let status = syncStatus
+        let operation = status.begin(.download, key: "download:" + itemIdentifier.rawValue)
+        let deliver = completionHandler
+        let completionHandler: (URL?, NSFileProviderItem?, Error?) -> Void = { url, item, error in
+            status.finish(operation, error: error)
+            deliver(url, item, error)
+        }
         let progress = Progress(totalUnitCount: 100)
         let task = Task {
             guard let webdav = self.webdavClient, let database = self.database else {
@@ -469,9 +523,10 @@ import UniformTypeIdentifiers
                 guard let metadata = metadata else {
                     throw NSError.fileProviderErrorForNonExistentItem(withIdentifier: itemIdentifier)
                 }
+                guard !metadata.isTrashed else { throw CocoaError(.featureUnsupported) }
                 try await database.setStatus(ocId: metadata.ocId, status: .downloading)
                 let (url, item) = try await downloadContents(metadata: metadata, webdav: webdav, database: database, progress: progress)
-                progress.completedUnitCount = 100
+                progress.completedUnitCount = progress.totalUnitCount
                 completionHandler(url, item, nil)
                 signalEnumerator(for: item.parentItemIdentifier)
                 signalEnumerator(for: .workingSet)
@@ -479,7 +534,9 @@ import UniformTypeIdentifiers
                 if case WebDAVError.notAuthenticated = error { markAuthenticationExpired(for: webdav) }
                 if case WebDAVError.conflict = error { signalEnumerator() }
                 if let metadata = metadata {
-                    try? await database.setStatus(ocId: metadata.ocId, status: .downloadError, error: error.localizedDescription)
+                    let cancelled = FileProviderSyncStatus.isCancellation(error)
+                    try? await database.setStatus(ocId: metadata.ocId, status: cancelled ? .normal : .downloadError,
+                                                  error: cancelled ? nil : error.localizedDescription)
                 }
                 completionHandler(nil, nil, fileProviderError(error, itemIdentifier: itemIdentifier))
             }
@@ -489,6 +546,14 @@ import UniformTypeIdentifiers
     }
 
     func createItem(basedOn itemTemplate: NSFileProviderItem, fields: NSFileProviderItemFields, contents url: URL?, options: NSFileProviderCreateItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
+        let status = syncStatus
+        let operation = status.begin(url == nil ? .metadata : .upload,
+                                     key: "create:" + itemTemplate.parentItemIdentifier.rawValue + "/" + itemTemplate.filename)
+        let deliver = completionHandler
+        let completionHandler: (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void = { item, fields, refetch, error in
+            status.finish(operation, error: error)
+            deliver(item, fields, refetch, error)
+        }
         logger.debug("Creating item: \(itemTemplate.filename)")
 
         let progress = Progress(totalUnitCount: 100)
@@ -506,6 +571,15 @@ import UniformTypeIdentifiers
             }
 
             do {
+                // DAV has no portable symbolic-link representation. Never turn
+                // a link into an empty regular file or dereference its target.
+                if itemTemplate.contentType?.conforms(to: .symbolicLink) == true {
+                    throw CocoaError(.featureUnsupported)
+                }
+                let isDirectory = itemTemplate.contentType?.conforms(to: .directory) == true
+                // Package archives require an explicit server representation.
+                // Preserve the local package rather than discarding a supplied payload.
+                if isDirectory && url != nil { throw CocoaError(.featureUnsupported) }
                 // Determine parent path
                 let parentPath: String
                 if itemTemplate.parentItemIdentifier == .rootContainer {
@@ -532,8 +606,8 @@ import UniformTypeIdentifiers
                         // Reimport may include new files created while disconnected.
                     }
                     if let existing = createdItem {
-                        var matches = existing.isDirectory && itemTemplate.contentType == .folder
-                        if !existing.isDirectory && itemTemplate.contentType != .folder {
+                        var matches = existing.isDirectory && isDirectory
+                        if !existing.isDirectory && !isDirectory {
                             if let localURL = url {
                                 let comparisonURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                                 defer { try? FileManager.default.removeItem(at: comparisonURL) }
@@ -550,10 +624,10 @@ import UniformTypeIdentifiers
                         }
                         if !matches {
                             let metadata = try await database.mergeServerMetadata(ItemMetadata(from: existing, parentOcId: parentOcId))
-                            let collision = FileProviderItem(metadata: metadata, parentItemIdentifier: itemTemplate.parentItemIdentifier)
+                            let collision = FileProviderItem(metadata: metadata, parentItemIdentifier: itemTemplate.parentItemIdentifier, supportsTrash: supportsTrash)
                             throw NSError.fileProviderErrorForCollision(with: collision)
                         }
-                    } else if url == nil && itemTemplate.contentType != .folder {
+                    } else if url == nil && !isDirectory {
                         // An unmatched dataless reimport must not create an empty file.
                         completionHandler(nil, [], false, nil)
                         return
@@ -561,7 +635,7 @@ import UniformTypeIdentifiers
                 }
 
                 if createdItem == nil {
-                    if itemTemplate.contentType == .folder {
+                    if isDirectory {
                         do {
                             createdItem = try await webdav.createDirectory(at: remotePath)
                         } catch let error as WebDAVError {
@@ -569,7 +643,7 @@ import UniformTypeIdentifiers
                                 createdItem = try await webdav.listDirectory(path: remotePath).first
                                 if let existing = createdItem, !existing.isDirectory {
                                     let metadata = try await database.mergeServerMetadata(ItemMetadata(from: existing, parentOcId: parentOcId))
-                                    let collision = FileProviderItem(metadata: metadata, parentItemIdentifier: itemTemplate.parentItemIdentifier)
+                                    let collision = FileProviderItem(metadata: metadata, parentItemIdentifier: itemTemplate.parentItemIdentifier, supportsTrash: supportsTrash)
                                     throw NSError.fileProviderErrorForCollision(with: collision)
                                 }
                             } else {
@@ -582,11 +656,12 @@ import UniformTypeIdentifiers
                         if url == nil { try Data().write(to: emptyURL) }
                         do {
                             createdItem = try await webdav.uploadFile(from: url ?? emptyURL, to: remotePath,
-                                                                      ifNoneMatch: true, progress: progress)
+                                                                      ifNoneMatch: true, progress: progress,
+                                                                      modificationDate: fields.contains(.contentModificationDate) ? itemTemplate.contentModificationDate ?? nil : nil)
                         } catch WebDAVError.conflict {
                             if let existing = try await webdav.listDirectory(path: remotePath).first {
                                 let metadata = try await database.mergeServerMetadata(ItemMetadata(from: existing, parentOcId: parentOcId))
-                                let collision = FileProviderItem(metadata: metadata, parentItemIdentifier: itemTemplate.parentItemIdentifier)
+                                let collision = FileProviderItem(metadata: metadata, parentItemIdentifier: itemTemplate.parentItemIdentifier, supportsTrash: supportsTrash)
                                 throw NSError.fileProviderErrorForCollision(with: collision)
                             }
                             throw NSFileProviderError(.cannotSynchronize)
@@ -604,8 +679,9 @@ import UniformTypeIdentifiers
                 metadata.isDownloaded = url != nil
                 try await database.addItemMetadata(metadata)
 
-                let item = FileProviderItem(metadata: metadata, parentItemIdentifier: itemTemplate.parentItemIdentifier)
-                progress.completedUnitCount = 100
+                metadata = try await applyFinderMetadata(from: itemTemplate, fields: fields, to: metadata, database: database)
+                let item = FileProviderItem(metadata: metadata, parentItemIdentifier: itemTemplate.parentItemIdentifier, supportsTrash: supportsTrash)
+                progress.completedUnitCount = progress.totalUnitCount
                 completionHandler(item, [], false, nil)
 
                 // Signal parent to refresh
@@ -623,12 +699,49 @@ import UniformTypeIdentifiers
         return progress
     }
     
+    private func applyFinderMetadata(from item: NSFileProviderItem, fields: NSFileProviderItemFields,
+                                     to metadata: ItemMetadata, database: ItemDatabase) async throws -> ItemMetadata {
+        var local = FinderMetadata()
+        var changed = Set<FinderMetadata.Field>()
+        if fields.contains(.tagData) { local.tagData = item.tagData ?? nil; changed.insert(.tagData) }
+        if fields.contains(.lastUsedDate) { local.lastUsedDate = item.lastUsedDate ?? nil; changed.insert(.lastUsedDate) }
+        if fields.contains(.fileSystemFlags) { local.fileSystemFlags = item.fileSystemFlags?.rawValue; changed.insert(.fileSystemFlags) }
+        if fields.contains(.extendedAttributes) { local.extendedAttributes = item.extendedAttributes; changed.insert(.extendedAttributes) }
+        if fields.contains(.creationDate) { local.creationDate = item.creationDate ?? nil; changed.insert(.creationDate) }
+        if fields.contains(.contentModificationDate) { local.contentModificationDate = item.contentModificationDate ?? nil; changed.insert(.contentModificationDate) }
+        guard !changed.isEmpty else { return metadata }
+        return try await database.updateLocalMetadata(ocId: metadata.ocId, metadata: local, fields: changed) ?? metadata
+    }
+
     func modifyItem(_ item: NSFileProviderItem, baseVersion: NSFileProviderItemVersion, changedFields: NSFileProviderItemFields, contents newContents: URL?, options: NSFileProviderModifyItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
+        let status = syncStatus
+        let operation = status.begin(newContents == nil ? .metadata : .upload, key: "modify:" + item.itemIdentifier.rawValue)
+        let deliver = completionHandler
+        let completionHandler: (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void = { item, fields, refetch, error in
+            status.finish(operation, error: error)
+            deliver(item, fields, refetch, error)
+        }
         logger.debug("Modifying item: \(item.filename), fields: \(changedFields.rawValue)")
 
         let progress = Progress(totalUnitCount: 100)
 
         let task = Task {
+            let remoteFields: NSFileProviderItemFields = [.contents, .filename, .parentItemIdentifier]
+            if changedFields.intersection(remoteFields).isEmpty, let database = self.database {
+                do {
+                    guard let metadata = await database.itemMetadata(ocId: item.itemIdentifier.rawValue) else {
+                        throw NSError.fileProviderErrorForNonExistentItem(withIdentifier: item.itemIdentifier)
+                    }
+                    let updated = try await applyFinderMetadata(from: item, fields: changedFields, to: metadata, database: database)
+                    progress.completedUnitCount = progress.totalUnitCount
+                    completionHandler(FileProviderItem(metadata: updated, parentItemIdentifier: item.parentItemIdentifier, supportsTrash: supportsTrash), [], false, nil)
+                    signalEnumerator(for: item.parentItemIdentifier)
+                    return
+                } catch {
+                    completionHandler(item, [], false, fileProviderError(error, isWrite: true))
+                    return
+                }
+            }
             guard let webdav = self.webdavClient, let database = self.database else {
                 completionHandler(item, [], false, NSFileProviderError(.notAuthenticated))
                 return
@@ -646,6 +759,9 @@ import UniformTypeIdentifiers
             }
 
             do {
+                if (metadata.isTrashed || metadata.isDirectory) && changedFields.contains(.contents) && newContents != nil {
+                    throw CocoaError(.featureUnsupported)
+                }
                 // Handle content changes (upload new content)
                 if let newContents = newContents, changedFields.contains(.contents) {
                     // After fetchContents, macOS may call modifyItem(.contents) to acknowledge
@@ -669,7 +785,8 @@ import UniformTypeIdentifiers
                         do {
                             guard let etag = String(data: baseVersion.contentVersion, encoding: .utf8),
                                   !etag.isEmpty, !etag.hasPrefix("stable-") else { throw WebDAVError.conflict }
-                            if let updatedItem = try await webdav.uploadFile(from: newContents, to: metadata.remotePath, ifMatchEtag: etag, progress: progress) {
+                            if let updatedItem = try await webdav.uploadFile(from: newContents, to: metadata.remotePath, ifMatchEtag: etag, progress: progress,
+                                                                           modificationDate: changedFields.contains(.contentModificationDate) ? item.contentModificationDate ?? nil : nil) {
                                 metadata = try await database.mergeServerMetadata(ItemMetadata(from: updatedItem, parentOcId: metadata.parentOcId), preservingIdentifier: metadata.ocId)
                             }
                         } catch WebDAVError.conflict {
@@ -688,15 +805,17 @@ import UniformTypeIdentifiers
                                 throw NSError.fileProviderErrorForNonExistentItem(withIdentifier: item.parentItemIdentifier)
                             }
                             let copy = try await webdav.uploadConflictCopy(from: newContents, directory: copyParent,
-                                                                         filename: item.filename, progress: progress)
+                                                                         filename: item.filename, progress: progress,
+                                                                         modificationDate: changedFields.contains(.contentModificationDate) ? item.contentModificationDate ?? nil : nil)
                             var copyMetadata = try await database.mergeServerMetadata(ItemMetadata(from: copy, parentOcId: copyParentId))
                             copyMetadata.isDownloaded = true
                             copyMetadata.isUploaded = true
                             try await database.addItemMetadata(copyMetadata)
+                            copyMetadata = try await applyFinderMetadata(from: item, fields: changedFields, to: copyMetadata, database: database)
                             // Returning the separate identity moves the edited local
                             // file to its conflict name. Enumeration keeps the original.
-                            let copyItem = FileProviderItem(metadata: copyMetadata, parentItemIdentifier: item.parentItemIdentifier)
-                            progress.completedUnitCount = 100
+                            let copyItem = FileProviderItem(metadata: copyMetadata, parentItemIdentifier: item.parentItemIdentifier, supportsTrash: supportsTrash)
+                            progress.completedUnitCount = progress.totalUnitCount
                             completionHandler(copyItem, [], false, nil)
                             signalEnumerator(for: item.parentItemIdentifier)
                             signalEnumerator()
@@ -708,6 +827,14 @@ import UniformTypeIdentifiers
                     }
                 }
 
+                if changedFields.contains(.parentItemIdentifier) && item.parentItemIdentifier == .trashContainer {
+                    guard supportsTrash else { throw CocoaError(.featureUnsupported) }
+                    if !metadata.isTrashed {
+                        let retirement = await status.removalScope(metadata: metadata, database: database)
+                        metadata = try await FileProviderTrash.trash(metadata: metadata, webdav: webdav, database: database)
+                        await status.retireRemovedItems(retirement, database: database, includingTrashed: true, preserving: operation)
+                    }
+                } else {
                 // Rename and reparent describe one final location. Moving through
                 // an intermediate name in the old parent can collide unnecessarily.
                 let requestedParentId = item.parentItemIdentifier == .rootContainer
@@ -722,6 +849,7 @@ import UniformTypeIdentifiers
                             destinationParentPath = "/"
                             destinationParentId = ItemDatabase.rootContainerId
                         } else if let parent = await database.itemMetadata(ocId: item.parentItemIdentifier.rawValue) {
+                            guard !parent.isTrashed else { throw CocoaError(.featureUnsupported) }
                             destinationParentPath = parent.remotePath
                             destinationParentId = parent.ocId
                         } else {
@@ -734,20 +862,25 @@ import UniformTypeIdentifiers
                     let destinationName = rename ? item.filename : metadata.filename
                     let destinationPath = destinationParentPath.hasSuffix("/")
                         ? destinationParentPath + destinationName : destinationParentPath + "/" + destinationName
-                    if let moved = try await webdav.moveItem(from: metadata.remotePath, to: destinationPath, expectedIdentifier: metadata.ocId) {
+                    if metadata.isTrashed {
+                        guard reparent, destinationParentId != NSFileProviderItemIdentifier.trashContainer.rawValue else {
+                            throw CocoaError(.featureUnsupported)
+                        }
+                        metadata = try await FileProviderTrash.restore(metadata: metadata, to: destinationPath, parentOcId: destinationParentId,
+                                                                       webdav: webdav, database: database)
+                    } else if let moved = try await webdav.moveItem(from: metadata.remotePath, to: destinationPath, expectedIdentifier: metadata.ocId) {
                         metadata = try await database.mergeServerMetadata(ItemMetadata(from: moved, parentOcId: destinationParentId), preservingIdentifier: metadata.ocId)
                     }
+                }
+
                 }
 
                 // Update database
                 try await database.addItemMetadata(metadata)
 
-                // Return empty stillPending — unhandled metadata fields (e.g.
-                // contentModificationDate) are implicitly synced when content is
-                // uploaded.  Returning them as pending blocks eviction because the
-                // system thinks there are unsynced local changes.
-                let updatedItem = FileProviderItem(metadata: metadata, parentItemIdentifier: item.parentItemIdentifier)
-                progress.completedUnitCount = 100
+                metadata = try await applyFinderMetadata(from: item, fields: changedFields, to: metadata, database: database)
+                let updatedItem = FileProviderItem(metadata: metadata, parentItemIdentifier: item.parentItemIdentifier, supportsTrash: supportsTrash)
+                progress.completedUnitCount = progress.totalUnitCount
                 completionHandler(updatedItem, [], false, nil)
 
             } catch {
@@ -763,6 +896,13 @@ import UniformTypeIdentifiers
     }
     
     func deleteItem(identifier: NSFileProviderItemIdentifier, baseVersion: NSFileProviderItemVersion, options: NSFileProviderDeleteItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (Error?) -> Void) -> Progress {
+        let status = syncStatus
+        let operation = status.begin(.metadata, key: "delete:" + identifier.rawValue)
+        let deliver = completionHandler
+        let completionHandler: (Error?) -> Void = { error in
+            status.finish(operation, error: error)
+            deliver(error)
+        }
         logger.debug("Deleting item: \(identifier.rawValue)")
         
         let progress = Progress(totalUnitCount: 1)
@@ -777,8 +917,17 @@ import UniformTypeIdentifiers
                 completionHandler(NSError.fileProviderErrorForNonExistentItem(withIdentifier: identifier))
                 return
             }
+            let retirement = await status.removalScope(metadata: metadata, database: database)
             
             do {
+                if metadata.isTrashed {
+                    try await FileProviderTrash.purge(metadata: metadata, webdav: webdav, database: database)
+                    await status.retireRemovedItems(retirement, database: database, preserving: operation)
+                    progress.completedUnitCount = progress.totalUnitCount
+                    completionHandler(nil)
+                    signalEnumerator(for: .trashContainer)
+                    return
+                }
                 // Delete on server
                 guard let etag = String(data: baseVersion.contentVersion, encoding: .utf8),
                       !etag.isEmpty, !etag.hasPrefix("stable-") else {
@@ -794,6 +943,7 @@ import UniformTypeIdentifiers
                 }
                 
                 progress.completedUnitCount = 1
+                await status.retireRemovedItems(retirement, database: database, preserving: operation)
                 completionHandler(nil)
                 
             } catch {
@@ -805,6 +955,7 @@ import UniformTypeIdentifiers
                     } else {
                         try? await database.deleteItemMetadata(ocId: metadata.ocId)
                     }
+                    await status.retireRemovedItems(retirement, database: database, preserving: operation)
                     completionHandler(nil)
                     return
                 }
@@ -847,7 +998,7 @@ import UniformTypeIdentifiers
     
     /// Called when pending items change (items waiting to be uploaded/downloaded)
     func pendingItemsDidChange(completionHandler: @escaping () -> Void) {
-        logger.debug("Pending items did change")
+        syncStatus.refreshPending()
         completionHandler()
     }
     
@@ -864,8 +1015,7 @@ import UniformTypeIdentifiers
         consumeRemovalTombstones()
         guard !hasPendingRemoval else { return NSFileProviderError(.notAuthenticated) }
         guard let generation = generation, !generation.isEmpty,
-              let defaults = UserDefaults(suiteName: appGroupIdentifier),
-              defaults.string(forKey: generationKey) == generation else {
+              credentialGenerationIsCurrent(generation) else {
             return NSFileProviderError(.notAuthenticated)
         }
         guard !password.isEmpty else { return NSFileProviderError(.notAuthenticated) }
@@ -880,7 +1030,7 @@ import UniformTypeIdentifiers
         defer { flock(credentialLock, LOCK_UN); Darwin.close(credentialLock) }
         Self.stateLock.lock()
         let previous = Self.domainStates[domain.identifier.rawValue] ?? DomainState()
-        if previous.isRemoving || defaults.bool(forKey: removalKey) || defaults.string(forKey: generationKey) != generation {
+        if previous.isRemoving || !credentialGenerationIsCurrent(generation) {
             Self.stateLock.unlock()
             return NSFileProviderError(.notAuthenticated)
         }
@@ -901,7 +1051,7 @@ import UniformTypeIdentifiers
         }
         // Removal intent is written by the host before its cleanup RPC. Recheck
         // after persistence so a config already in flight cannot resurrect secrets.
-        guard defaults.string(forKey: generationKey) == generation, !defaults.bool(forKey: removalKey) else {
+        guard credentialGenerationIsCurrent(generation) else {
             _ = clearPersistedCredentials(for: domain.identifier.rawValue)
             var failed = previous
             failed.isAuthenticated = false
@@ -925,6 +1075,13 @@ import UniformTypeIdentifiers
         Self.domainStates[domain.identifier.rawValue] = updated
         Self.stateLock.unlock()
 
+        syncStatus.clearAuthenticationErrors(requireRemoteCheck: previous.password != password || !previous.isAuthenticated
+            || previous.username != user || previous.userId != userId || previous.serverUrl != serverUrl
+            || previous.davPath != resolvedDavPath || previous.authType != resolvedAuthType)
+        NSFileProviderManager(for: domain)?.signalErrorResolved(NSFileProviderError(.notAuthenticated)) { [logger] error in
+            if let error = error { logger.debug("Could not clear authentication throttling: \(error.localizedDescription)") }
+        }
+
         // Tokens do not change item identity. Delta enumeration already refreshes
         // known folders, so credential delivery must never force a disk reimport.
         if !unchanged || !previous.isAuthenticated { signalEnumerator() }
@@ -933,8 +1090,8 @@ import UniformTypeIdentifiers
 
     /// Called by ClientCommunicationService when main app removes account
     private func consumeRemovalTombstones() {
-        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
-        for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix("fp_removed_domain_") {
+        guard let values = try? persistedCredentialState() else { return }
+        for (key, value) in values where key.hasPrefix("fp_removed_domain_") {
             guard (value as? NSNumber)?.boolValue == true else { continue }
             let identifier = String(key.dropFirst("fp_removed_domain_".count))
             removeDomainConfiguration(identifier, completionHandler: nil)
@@ -956,11 +1113,11 @@ import UniformTypeIdentifiers
         state.isRemoving = error != nil
         Self.domainStates[identifier] = state
         Self.stateLock.unlock()
+        if identifier == domain.identifier.rawValue { syncStatus.reset() }
         callbacks.forEach { $0(error) }
     }
 
     private func removeDomainConfiguration(_ identifier: String, expectedGeneration: String? = nil, completionHandler: ((Error?) -> Void)?) {
-        let defaults = UserDefaults(suiteName: appGroupIdentifier)
         let key = "fp_removed_domain_" + identifier
         let credentialLock: Int32
         do { credentialLock = try acquireCredentialLock(for: identifier) }
@@ -969,7 +1126,7 @@ import UniformTypeIdentifiers
         defer { if !cleanupOwnsLock { flock(credentialLock, LOCK_UN); Darwin.close(credentialLock) } }
         Self.stateLock.lock()
         if let expectedGeneration = expectedGeneration,
-           expectedGeneration.isEmpty || defaults?.string(forKey: "fp_config_generation_" + identifier) != expectedGeneration {
+           expectedGeneration.isEmpty || (try? persistedCredentialState())?["fp_config_generation_" + identifier] as? String != expectedGeneration {
             Self.stateLock.unlock()
             completionHandler?(NSFileProviderError(.notAuthenticated))
             return
@@ -979,12 +1136,18 @@ import UniformTypeIdentifiers
             Self.stateLock.unlock()
             return
         }
-        defaults?.set(true, forKey: key)
-        defaults?.synchronize()
         // Retain a revocation generation after the tombstone is consumed. Any
         // pre-removal configure still queued on another connection stays invalid.
-        defaults?.set(UUID().uuidString, forKey: "fp_config_generation_" + identifier)
-        defaults?.synchronize()
+        do {
+            try persistCredentialState([key: true, "fp_config_generation_" + identifier: UUID().uuidString])
+        } catch {
+            var failed = DomainState()
+            failed.isRemoving = true
+            Self.domainStates[identifier] = failed
+            Self.stateLock.unlock()
+            completionHandler?(error)
+            return
+        }
         var removed = DomainState()
         removed.isRemoving = true
         removed.cleanupInFlight = true
@@ -1010,8 +1173,7 @@ import UniformTypeIdentifiers
                 }
                 try await removedDatabase.clearAll()
                 if let credentialError = credentialError { throw credentialError }
-                defaults?.removeObject(forKey: key)
-                defaults?.synchronize()
+                try persistCredentialState([:], removing: [key])
                 cleanupError = nil
             } catch {
                 cleanupError = credentialError ?? error
@@ -1022,6 +1184,10 @@ import UniformTypeIdentifiers
             Darwin.close(credentialLock)
             finishDomainRemoval(identifier, error: cleanupError)
         }
+    }
+
+    func remoteCheckSucceeded() {
+        NSFileProviderManager(for: domain)?.signalErrorResolved(NSFileProviderError(.serverUnreachable)) { _ in }
     }
 
     func signalEnumerator() {

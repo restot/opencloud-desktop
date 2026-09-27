@@ -109,6 +109,15 @@ Pane {
             Layout.fillWidth: true
             visible: accountSettings.useFileProvider
             wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: accountSettings.onDemandSyncStatus
+            Accessible.name: text
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: accountSettings.useFileProvider
+            wrapMode: Text.WordWrap
             text: qsTr("Files are available on demand in Finder. To download selected folders locally, enable traditional folder sync in Settings.")
         }
 

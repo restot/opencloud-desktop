@@ -32,7 +32,24 @@ private final class MockDAVProtocol: URLProtocol {
         precondition(condition(), message)
     }
     static func main() async throws {
+        check(FileProviderItem.rootContainer().itemVersion.metadataVersion == FileProviderItem.rootContainer().itemVersion.metadataVersion,
+              "root metadata version must remain stable between calls")
+        check(FileProviderItem.trashContainer().itemVersion.metadataVersion == FileProviderItem.trashContainer().itemVersion.metadataVersion,
+              "trash metadata version must remain stable between calls")
+        check(FileProviderItem.trashContainer().fileSystemFlags.contains(.userWritable),
+              "native restore and purge require a writable trash container")
+        check(!FileProviderItem.rootContainer(supportsCreating: false).capabilities.contains(.allowsAddingSubItems),
+              "virtual Shares root cannot create arbitrary files or folders")
+        check(FileProviderItem.rootContainer().capabilities.contains(.allowsAddingSubItems),
+              "ordinary writable roots continue accepting local uploads")
+        check(!FileProviderItem.rootContainer().capabilities.contains(.allowsDeleting)
+              && !FileProviderItem.rootContainer().capabilities.contains(.allowsRenaming),
+              "special root containers cannot be deleted or renamed")
         let deniedRead = fileProviderError(WebDAVError.permissionDenied) as NSError
+        check(fileProviderErrorDiagnostic(WebDAVError.httpError(statusCode: 503, message: "secret URL")) == "dav-http-503",
+              "public diagnostics never expose HTTP response messages")
+        check(fileProviderErrorDiagnostic(WebDAVError.parseError("private filename")) == "dav-invalid-multistatus",
+              "public diagnostics never expose parser input")
         let deniedWrite = fileProviderError(WebDAVError.permissionDenied, isWrite: true) as NSError
         check(deniedRead.domain == NSCocoaErrorDomain && deniedRead.code == CocoaError.fileReadNoPermission.rawValue,
               "read permissions use Cocoa read error")
@@ -75,6 +92,26 @@ private final class MockDAVProtocol: URLProtocol {
         check(fileItem.itemVersion.contentVersion == movedItem.itemVersion.contentVersion, "moving preserves content version")
         check(fileItem.itemVersion.metadataVersion != movedItem.itemVersion.metadataVersion, "moving changes metadata version")
         check(fileItem.itemVersion.metadataVersion.count <= 128, "metadata versions fit the FileProvider size limit")
+        var refreshedMetadata = fileMetadata
+        refreshedMetadata.syncTime = fileMetadata.syncTime.addingTimeInterval(60)
+        let refreshedItem = FileProviderItem(metadata: refreshedMetadata, parentItemIdentifier: NSFileProviderItemIdentifier("parent"))
+        check(fileItem.creationDate == nil && fileItem.contentModificationDate == nil, "missing server dates stay unknown")
+        check(fileItem.itemVersion.metadataVersion == refreshedItem.itemVersion.metadataVersion,
+              "refreshing undated metadata must not change its version")
+        refreshedMetadata.finderMetadata.tagData = Data("tag blob".utf8)
+        refreshedMetadata.finderMetadata.fileSystemFlags = NSFileProviderFileSystemFlags.hidden.rawValue
+        let taggedItem = FileProviderItem(metadata: refreshedMetadata, parentItemIdentifier: NSFileProviderItemIdentifier("parent"))
+        check(taggedItem.tagData == Data("tag blob".utf8) && taggedItem.fileSystemFlags.contains(.hidden), "Finder metadata is returned intact")
+        check(taggedItem.itemVersion.metadataVersion != fileItem.itemVersion.metadataVersion, "Finder metadata changes invalidate the item version")
+        check(fileItem.contentPolicy == .inherited && FileProviderItem.rootContainer().contentPolicy == .downloadLazily,
+              "native content policies inherit on-demand defaults")
+        var trashedMetadata = fileMetadata
+        trashedMetadata.finderMetadata.trash = TrashMetadata(key: "deleted-file", originalPath: fileMetadata.remotePath,
+                                                             originalParentOcId: "parent", deletionDate: nil)
+        let trashedItem = FileProviderItem(metadata: trashedMetadata, parentItemIdentifier: .trashContainer)
+        check(trashedItem.capabilities.contains(.allowsRenaming) && trashedItem.capabilities.contains(.allowsReparenting),
+              "restoring under a new name requires both native capabilities")
+        check(!trashedItem.capabilities.contains(.allowsWriting), "trash does not advertise unsupported content edits")
 
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockDAVProtocol.self]
@@ -116,12 +153,14 @@ private final class MockDAVProtocol: URLProtocol {
         MockDAVProtocol.requests = []
         MockDAVProtocol.handler = { _ in (412, Data()) }
         do {
-            _ = try await client.uploadFile(from: upload, to: "/file.txt", ifMatchEtag: "old-version")
+            _ = try await client.uploadFile(from: upload, to: "/file.txt", ifMatchEtag: "old-version",
+                                            modificationDate: Date(timeIntervalSince1970: 1234567890))
             preconditionFailure("conflicting edit must fail")
         } catch WebDAVError.conflict { }
         check(MockDAVProtocol.requests.count == 1, "never retry a conflicting upload unconditionally")
         check(MockDAVProtocol.requests[0].value(forHTTPHeaderField: "If-Match") == "\"old-version\"", "quote legacy cached ETags")
         check(MockDAVProtocol.requests[0].value(forHTTPHeaderField: "Content-Type") == "text/plain", "upload media type uses destination filename rather than temporary contents URL")
+        check(MockDAVProtocol.requests[0].value(forHTTPHeaderField: "X-OC-Mtime") == "1234567890", "upload preserves the requested native modification time")
         do {
             _ = try await client.uploadFile(from: upload, to: "/file.txt", ifNoneMatch: true)
             preconditionFailure("creation collision must fail")

@@ -30,17 +30,67 @@ func call(_ connection: NSXPCConnection, operation: (ClientCommunicationProtocol
     }
 }
 
+func syncStatus(_ connection: NSXPCConnection, domain: String) async throws -> [String: Any] {
+    let snapshot = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: Any], Error>) in
+        let reply = Reply(continuation)
+        let proxy = connection.remoteObjectProxyWithErrorHandler { reply.finish(.failure($0)) } as! ClientCommunicationProtocol
+        proxy.getSyncStatus { value, error in
+            if let error { reply.finish(.failure(error)) }
+            else if let value { reply.finish(.success(value)) }
+            else { reply.finish(.failure(NSError(domain: "SignedProviderTest", code: 5))) }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+            reply.finish(.failure(NSError(domain: "SignedProviderTest", code: 6,
+                                         userInfo: [NSLocalizedDescriptionKey: "Sync status reply timed out"])))
+        }
+    }
+    try require(snapshot["domainIdentifier"] as? String == domain, "Sync status belongs to another domain")
+    try require((snapshot["schemaVersion"] as? NSNumber)?.intValue == 1, "Unexpected sync status schema")
+    try require(snapshot["isAuthenticated"] as? Bool == true, "Configured domain status is not authenticated")
+    for key in ["activeUploads", "activeDownloads", "activeMetadata", "pendingItems", "errorCount",
+                "uploadedBytes", "uploadTotalBytes", "downloadedBytes", "downloadTotalBytes",
+                "lastCheckedAt", "lastSyncedAt", "sampledAt"] {
+        try require((snapshot[key] as? NSNumber)?.doubleValue ?? -1 >= 0, "Invalid sync status field " + key)
+    }
+    if snapshot["isSynced"] as? Bool == true {
+        try require(snapshot["pendingKnown"] as? Bool == true && snapshot["pendingTruncated"] as? Bool == false,
+                    "Synced status lacks a complete pending sample")
+        for key in ["activeUploads", "activeDownloads", "activeMetadata", "pendingItems", "errorCount"] {
+            try require((snapshot[key] as? NSNumber)?.intValue == 0, "Synced status has outstanding " + key)
+        }
+    }
+    return snapshot
+}
+
+func persistGeneration(_ generation: String, key: String, markRemoval: Bool = false) throws {
+    let group = Bundle.main.object(forInfoDictionaryKey: "AppGroupIdentifier") as! String
+    var values: [String: Any] = [key: generation]
+    let removalKey = "fp_removed_domain_" + key.dropFirst("fp_config_generation_".count)
+    if markRemoval { values[removalKey] = true }
+    CFPreferencesSetMultiple(values as CFDictionary, nil, group as CFString,
+                             kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+    try require(CFPreferencesSynchronize(group as CFString, kCFPreferencesCurrentUser, kCFPreferencesAnyHost),
+                "Exact-scope credential generation synchronization failed")
+    try require(CFPreferencesCopyValue(key as CFString, group as CFString,
+                                      kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? String == generation,
+                "Credential generation readback failed")
+    if markRemoval {
+        try require(CFPreferencesCopyValue(removalKey as CFString, group as CFString,
+                                          kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? Bool == true,
+                    "Credential removal tombstone readback failed")
+    }
+}
+
 func clearConfiguration(_ connection: NSXPCConnection, defaults: UserDefaults, key: String) async throws {
     let generation = UUID().uuidString
-    defaults.set(generation, forKey: key)
-    defaults.synchronize()
+    try persistGeneration(generation, key: key, markRemoval: true)
     try await call(connection) { proxy, completion in
         proxy.removeAccountConfig(withGeneration: generation, completionHandler: completion)
     }
 }
 
 func assertRemote(_ server: String, domain: String, filename: String, content: Data?) async throws {
-    var request = URLRequest(url: URL(string: server)!.appendingPathComponent(domain).appendingPathComponent(filename))
+    var request = URLRequest(url: URL(string: server)!.appendingPathComponent("dav/spaces").appendingPathComponent(domain).appendingPathComponent(filename))
     request.setValue("Basic " + Data(("review:test-" + domain).utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
     for _ in 0..<40 {
         let (bytes, response) = try await URLSession.shared.data(for: request)
@@ -53,12 +103,39 @@ func assertRemote(_ server: String, domain: String, filename: String, content: D
     throw NSError(domain: "SignedProviderTest", code: 4, userInfo: [NSLocalizedDescriptionKey: "Remote mutation did not arrive for " + filename])
 }
 
+func assertTrash(_ server: String, domain: String, filename: String, present: Bool) async throws {
+    var request = URLRequest(url: URL(string: server)!.appendingPathComponent("dav/spaces/trash-bin").appendingPathComponent(domain))
+    request.httpMethod = "PROPFIND"
+    request.setValue("1", forHTTPHeaderField: "Depth")
+    request.setValue("Basic " + Data(("review:test-" + domain).utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
+    for _ in 0..<40 {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let listed = String(decoding: data, as: UTF8.self).contains(">" + filename + "<")
+        if (response as? HTTPURLResponse)?.statusCode == 207 && listed == present { return }
+        try await Task.sleep(nanoseconds: 500_000_000)
+    }
+    throw NSError(domain: "SignedProviderTest", code: 9, userInfo: [NSLocalizedDescriptionKey: "Recycle state did not arrive for " + filename])
+}
+
+func assertNativeCapabilities(_ domain: NSFileProviderDomain, enabled: Bool) async throws {
+    let registered = try await NSFileProviderManager.domains()
+    guard let stored = registered.first(where: { $0.identifier == domain.identifier }) else {
+        throw NSError(domain: "SignedProviderTest", code: 10,
+                      userInfo: [NSLocalizedDescriptionKey: "Capability probe domain disappeared"])
+    }
+    print("CAPABILITIES expected=\(enabled) trash=\(stored.supportsSyncingTrash) search=\(stored.supportsStringSearchRequest)")
+    try require(stored.supportsSyncingTrash == enabled, "Native trash capability did not persist")
+    try require(stored.supportsStringSearchRequest == enabled, "Native search capability did not persist")
+}
+
 @main struct SignedProviderTest {
     static func main() async {
         setbuf(stdout, nil)
         let args = CommandLine.arguments
         guard args.count >= 3, args[2].hasPrefix("review-") else { exit(2) }
         let domain = NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier(args[2]), displayName: "OpenCloud isolated review")
+        domain.supportsSyncingTrash = true
+        domain.supportsStringSearchRequest = true
         do {
             if args[1] == "cleanup-project" {
                 guard args.count == 4, args[3].hasPrefix(String(args[2].dropFirst("review-".count)) + ".space.") else { exit(2) }
@@ -98,6 +175,16 @@ func assertRemote(_ server: String, domain: String, filename: String, content: D
             }
             print("PASS signed domain registration")
             if args[1] == "register-only" { return }
+            try await assertNativeCapabilities(domain, enabled: true)
+            domain.supportsSyncingTrash = false
+            domain.supportsStringSearchRequest = false
+            try await NSFileProviderManager.add(domain)
+            try await assertNativeCapabilities(domain, enabled: false)
+            domain.supportsSyncingTrash = true
+            domain.supportsStringSearchRequest = true
+            try await NSFileProviderManager.add(domain)
+            try await assertNativeCapabilities(domain, enabled: true)
+            print("PASS native capability readback and existing-domain updates")
             // Keep this vector aligned with fileproviderdomainidentity.h. Real
             // project/shared IDs contain two UUIDs separated by '$'. Mock-only
             // lifecycle tests cannot enforce the native identifier restrictions.
@@ -146,13 +233,33 @@ func assertRemote(_ server: String, domain: String, filename: String, content: D
             let defaults = UserDefaults(suiteName: group)!
             let generationKey = "fp_config_generation_" + args[2]
             let initialGeneration = UUID().uuidString
-            defaults.set(initialGeneration, forKey: generationKey)
-            defaults.synchronize()
+            print("Diagnostic suite synchronize result: \(defaults.synchronize())")
+            try persistGeneration(initialGeneration, key: generationKey)
+            print("PASS exact-scope generation persistence and readback")
             try await call(connection) { proxy, completion in
                 proxy.configureAccount(withUser: "review", userId: "review", serverUrl: args[3],
-                    password: "test-" + args[2], davPath: "/" + args[2] + "/", authType: "basic", generation: initialGeneration, completionHandler: completion)
+                    password: "test-" + args[2], davPath: "/dav/spaces/" + args[2] + "/", authType: "basic", generation: initialGeneration, completionHandler: completion)
             }
             print("PASS acknowledged Keychain configuration")
+            let replacementGeneration = UUID().uuidString
+            try persistGeneration(replacementGeneration, key: generationKey)
+            var staleGenerationRejected = false
+            do {
+                try await call(connection) { proxy, completion in
+                    proxy.configureAccount(withUser: "review", userId: "review", serverUrl: args[3],
+                        password: "test-" + args[2], davPath: "/dav/spaces/" + args[2] + "/", authType: "basic",
+                        generation: initialGeneration, completionHandler: completion)
+                }
+            } catch { staleGenerationRejected = true }
+            try require(staleGenerationRejected, "Warmed extension accepted a generation revoked by the host")
+            try await call(connection) { proxy, completion in
+                proxy.configureAccount(withUser: "review", userId: "review", serverUrl: args[3],
+                    password: "test-" + args[2], davPath: "/dav/spaces/" + args[2] + "/", authType: "basic",
+                    generation: replacementGeneration, completionHandler: completion)
+            }
+            print("PASS cross-process generation replacement invalidates warmed extension state")
+            _ = try await syncStatus(connection, domain: args[2])
+            print("PASS authenticated domain sync-status schema")
             let secondID = args[2] + "-second"
             let secondDomain = NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier(secondID), displayName: "OpenCloud isolated second account")
             try await NSFileProviderManager.add(secondDomain)
@@ -164,11 +271,10 @@ func assertRemote(_ server: String, domain: String, filename: String, content: D
             defer { secondConnection.invalidate() }
             let secondKey = "fp_config_generation_" + secondID
             let secondGeneration = UUID().uuidString
-            defaults.set(secondGeneration, forKey: secondKey)
-            defaults.synchronize()
+            try persistGeneration(secondGeneration, key: secondKey)
             try await call(secondConnection) { proxy, completion in
                 proxy.configureAccount(withUser: "review", userId: "second", serverUrl: args[3], password: "test-" + secondID,
-                    davPath: "/" + secondID + "/", authType: "basic", generation: secondGeneration, completionHandler: completion)
+                    davPath: "/dav/spaces/" + secondID + "/", authType: "basic", generation: secondGeneration, completionHandler: completion)
             }
             if args[1] == "interactive" {
                 print("ACTION: Enable OpenCloud Isolated Test under System Settings > General > Login Items & Extensions > File Providers")
@@ -202,6 +308,19 @@ func assertRemote(_ server: String, domain: String, filename: String, content: D
             if let readError { throw readError }
             try require(downloaded == Data(("hello " + args[2]).utf8), "Hydration returned wrong account contents")
             print("PASS Finder enumeration and on-demand hydration")
+            var observedStatus = false
+            for _ in 0..<40 {
+                let status = try await syncStatus(connection, domain: args[2])
+                if status["pendingKnown"] as? Bool == true,
+                   (status["activeUploads"] as? NSNumber)?.intValue == 0,
+                   (status["activeDownloads"] as? NSNumber)?.intValue == 0 {
+                    observedStatus = true
+                    break
+                }
+                try await Task.sleep(nanoseconds: 500_000_000)
+            }
+            try require(observedStatus, "Native transfer status never settled after hydration")
+            print("PASS signed sync-status snapshot, native pending observation, and settled transfer counts")
             let secondRoot = try await secondManager.getUserVisibleURL(for: .rootContainer)
             let secondScope = secondRoot.startAccessingSecurityScopedResource()
             defer { if secondScope { secondRoot.stopAccessingSecurityScopedResource() } }
@@ -242,7 +361,39 @@ func assertRemote(_ server: String, domain: String, filename: String, content: D
             if let mutationError { throw mutationError }
             try await assertRemote(args[3], domain: args[2], filename: "renamed.txt", content: nil)
             print("PASS Finder upload, rename, and delete")
-            var control = URLRequest(url: URL(string: args[3])!.appendingPathComponent(args[2]).appendingPathComponent(".test-control"))
+            let packageURL = rootURL.appendingPathComponent("Review.bundle", isDirectory: true)
+            coordinator.coordinate(writingItemAt: packageURL, options: [], error: &writeError) { url in
+                do {
+                    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+                    try localContents.write(to: url.appendingPathComponent("contents.txt"))
+                } catch { mutationError = error }
+            }
+            if let writeError { throw writeError }
+            if let mutationError { throw mutationError }
+            try await assertRemote(args[3], domain: args[2], filename: "Review.bundle/contents.txt", content: localContents)
+            print("PASS native package directory preserves child contents")
+            let trashSource = rootURL.appendingPathComponent("trash-demo.txt")
+            let trashRestored = rootURL.appendingPathComponent("trash-restored.txt")
+            try localContents.write(to: trashSource)
+            try await assertRemote(args[3], domain: args[2], filename: "trash-demo.txt", content: localContents)
+            var trashedURL: NSURL?
+            try FileManager.default.trashItem(at: trashSource, resultingItemURL: &trashedURL)
+            try await assertRemote(args[3], domain: args[2], filename: "trash-demo.txt", content: nil)
+            try await assertTrash(args[3], domain: args[2], filename: "trash-demo.txt", present: true)
+            guard let trashedURL = trashedURL as URL? else { throw NSError(domain: "SignedProviderTest", code: 8) }
+            coordinator.coordinate(writingItemAt: trashedURL, options: .forMoving, error: &writeError) { url in
+                do { try FileManager.default.moveItem(at: url, to: trashRestored) } catch { mutationError = error }
+            }
+            if let writeError { throw writeError }
+            if let mutationError { throw mutationError }
+            try await assertRemote(args[3], domain: args[2], filename: "trash-restored.txt", content: localContents)
+            var trashAgainURL: NSURL?
+            try FileManager.default.trashItem(at: trashRestored, resultingItemURL: &trashAgainURL)
+            try await assertRemote(args[3], domain: args[2], filename: "trash-restored.txt", content: nil)
+            if let trashAgainURL = trashAgainURL as URL? { try FileManager.default.removeItem(at: trashAgainURL) }
+            try await assertTrash(args[3], domain: args[2], filename: "trash-restored.txt", present: false)
+            print("PASS native Finder trash, restore, and permanent delete")
+            var control = URLRequest(url: URL(string: args[3])!.appendingPathComponent("dav/spaces").appendingPathComponent(args[2]).appendingPathComponent(".test-control"))
             control.httpMethod = "POST"
             control.setValue("Basic " + Data(("review:test-" + args[2]).utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
             control.httpBody = Data("{\"offline\":true}".utf8)
@@ -256,7 +407,7 @@ func assertRemote(_ server: String, domain: String, filename: String, content: D
             try require(offlineData == downloaded, "Hydrated contents were unavailable offline")
             print("PASS offline access to hydrated contents")
 
-            let remoteFile = "/" + args[2] + "/hello.txt"
+            let remoteFile = "/dav/spaces/" + args[2] + "/hello.txt"
             let fileID = SHA256.hash(data: Data(remoteFile.utf8)).map { String(format: "%02x", $0) }.joined()
             try await manager.evictItem(identifier: NSFileProviderItemIdentifier(fileID))
             let extensionPath = Bundle.main.bundleURL.appendingPathComponent("Contents/PlugIns/FileProviderExt.appex/Contents/MacOS/FileProviderExt").resolvingSymlinksInPath().path
@@ -306,16 +457,15 @@ func assertRemote(_ server: String, domain: String, filename: String, content: D
             do {
                 try await call(connection) { proxy, completion in
                     proxy.configureAccount(withUser: "review", userId: "review", serverUrl: args[3],
-                        password: "test-" + args[2], davPath: "/" + args[2] + "/", authType: "basic", generation: initialGeneration, completionHandler: completion)
+                        password: "test-" + args[2], davPath: "/dav/spaces/" + args[2] + "/", authType: "basic", generation: initialGeneration, completionHandler: completion)
                 }
             } catch { staleRejected = true }
             try require(staleRejected, "Pre-sign-out configuration revived removed credentials")
             let freshGeneration = UUID().uuidString
-            defaults.set(freshGeneration, forKey: generationKey)
-            defaults.synchronize()
+            try persistGeneration(freshGeneration, key: generationKey)
             try await call(connection) { proxy, completion in
                 proxy.configureAccount(withUser: "review", userId: "review", serverUrl: args[3],
-                    password: "test-" + args[2], davPath: "/" + args[2] + "/", authType: "basic", generation: freshGeneration, completionHandler: completion)
+                    password: "test-" + args[2], davPath: "/dav/spaces/" + args[2] + "/", authType: "basic", generation: freshGeneration, completionHandler: completion)
             }
             try await clearConfiguration(connection, defaults: defaults, key: generationKey)
             print("PASS revoked generation rejected and fresh sign-in accepted")

@@ -43,8 +43,14 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
     private let _isDownloading: Bool
     private let _isUploaded: Bool
     private let _isUploading: Bool
+    private let supportsTrash: Bool
     
     var capabilities: NSFileProviderItemCapabilities {
+        if itemIsTrashed {
+            var caps: NSFileProviderItemCapabilities = [.allowsDeleting, .allowsReparenting, .allowsRenaming]
+            if contentType == .folder { caps.insert(.allowsContentEnumerating) }
+            return caps
+        }
         var caps: NSFileProviderItemCapabilities = [.allowsReading]
         let perms = _permissions.uppercased()
 
@@ -57,6 +63,7 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
         // D = deletable
         if perms.contains("D") {
             caps.insert(.allowsDeleting)
+            if supportsTrash { caps.insert(.allowsTrashing) }
         }
 
         // W = writable (for files)
@@ -73,24 +80,57 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
             caps.insert(.allowsAddingSubItems)
         }
 
-        // Downloaded files can be evicted (Remove Download in Finder)
-        if contentType != .folder && _isDownloaded {
-            caps.insert(.allowsEvicting)
-        }
-
         return caps
     }
     
+    var userInfo: [AnyHashable: Any]? {
+        ["openCloudActions": metadata != nil && !itemIsTrashed,
+         "openCloudCanShowVersions": metadata != nil && !itemIsTrashed && metadata?.isDirectory == false,
+         "openCloudCanShare": metadata != nil && !itemIsTrashed && (metadata?.permissions.uppercased().contains("R") ?? false)]
+    }
+
+    var itemIsTrashed: Bool { metadata?.isTrashed ?? false }
+
+    var contentPolicy: NSFileProviderContentPolicy {
+        if itemIdentifier == .rootContainer { return .downloadLazily }
+        return NSFileProviderContentPolicy(rawValue: metadata?.finderMetadata.contentPolicy ?? 0) ?? .inherited
+    }
+    var tagData: Data? { metadata?.finderMetadata.tagData }
+    var lastUsedDate: Date? { metadata?.finderMetadata.lastUsedDate }
+    var extendedAttributes: [String: Data] { metadata?.finderMetadata.extendedAttributes ?? [:] }
+    var fileSystemFlags: NSFileProviderFileSystemFlags {
+        // Restoring or purging a child needs write permission on its local
+        // trash directory even though the server does not support content edits.
+        if itemIdentifier == .trashContainer || (itemIsTrashed && contentType == .folder) {
+            return [.userReadable, .userWritable, .userExecutable]
+        }
+        if let raw = metadata?.finderMetadata.fileSystemFlags { return NSFileProviderFileSystemFlags(rawValue: raw) }
+        var flags: NSFileProviderFileSystemFlags = [.userReadable]
+        if capabilities.contains(.allowsWriting) || capabilities.contains(.allowsAddingSubItems) { flags.insert(.userWritable) }
+        if contentType == .folder { flags.insert(.userExecutable) }
+        return flags
+    }
+    var uploadingError: Error? {
+        metadata?.status == .uploadError ? NSFileProviderError(.cannotSynchronize) : nil
+    }
+    var downloadingError: Error? {
+        metadata?.status == .downloadError ? NSFileProviderError(.cannotSynchronize) : nil
+    }
+
     var itemVersion: NSFileProviderItemVersion {
         // Use ETag for content version (consistent with server)
         let contentData = _etag.data(using: .utf8) ?? Data()
         // ETags describe content; rename, permissions and transfer state can
         // change independently and must invalidate the metadata version too.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let localMetadata = (try? encoder.encode(metadata?.finderMetadata ?? FinderMetadata()).base64EncodedString()) ?? ""
         let values = [_etag, filename, parentItemIdentifier.rawValue, _permissions,
                       contentType.identifier, documentSize?.stringValue ?? "",
                       creationDate.map { String($0.timeIntervalSince1970) } ?? "",
                       contentModificationDate.map { String($0.timeIntervalSince1970) } ?? "",
-                      String(_isDownloaded), String(_isDownloading), String(_isUploaded), String(_isUploading)]
+                      String(_isDownloaded), String(_isDownloading), String(_isUploaded), String(_isUploading),
+                      localMetadata, metadata?.statusError ?? "", String(metadata?.status.rawValue ?? 0)]
         let metadataData = (try? JSONSerialization.data(withJSONObject: values)) ?? Data()
         // FileProvider limits each version component to 128 bytes.
         return NSFileProviderItemVersion(contentVersion: contentData, metadataVersion: Data(SHA256.hash(data: metadataData)))
@@ -109,7 +149,8 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
     
     // MARK: - Initialization from ItemMetadata
     
-    init(metadata: ItemMetadata, parentItemIdentifier: NSFileProviderItemIdentifier) {
+    init(metadata: ItemMetadata, parentItemIdentifier: NSFileProviderItemIdentifier, supportsTrash: Bool = false) {
+        self.supportsTrash = supportsTrash
         self.metadata = metadata
         self.itemIdentifier = NSFileProviderItemIdentifier(metadata.ocId)
         self.parentItemIdentifier = parentItemIdentifier
@@ -129,9 +170,9 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
         }
         
         self.documentSize = metadata.isDirectory ? nil : NSNumber(value: metadata.size)
-        // Use current date as fallback if server didn't provide dates
-        self.creationDate = metadata.creationDate ?? metadata.syncTime
-        self.contentModificationDate = metadata.lastModified ?? metadata.syncTime
+        // Unknown dates stay unknown; a cache refresh must not invent a metadata change.
+        self.creationDate = metadata.finderMetadata.creationDate ?? metadata.creationDate
+        self.contentModificationDate = metadata.finderMetadata.contentModificationDate ?? metadata.lastModified
         // Use stable deterministic fallback when server doesn't provide ETag.
         // Random UUIDs cause contentVersion to differ every time the item is
         // constructed, making the system think content constantly changes.
@@ -151,14 +192,14 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
     // MARK: - Initialization for Special Containers
     
     /// Create a root container item
-    static func rootContainer() -> FileProviderItem {
+    static func rootContainer(supportsCreating: Bool = true) -> FileProviderItem {
         return FileProviderItem(
             identifier: .rootContainer,
             parentIdentifier: .rootContainer,
             filename: "OpenCloud",
             contentType: .folder,
             etag: "root",
-            permissions: "RGDNVWCK"
+            permissions: supportsCreating ? "GCK" : "G"
         )
     }
     
@@ -191,13 +232,14 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
         isUploading: Bool = false
     ) {
         self.metadata = nil
+        self.supportsTrash = false
         self.itemIdentifier = identifier
         self.parentItemIdentifier = parentIdentifier
         self.filename = filename
         self.contentType = contentType
         self.documentSize = NSNumber(value: documentSize)
-        self.creationDate = creationDate ?? Date()
-        self.contentModificationDate = contentModificationDate ?? Date()
+        self.creationDate = creationDate
+        self.contentModificationDate = contentModificationDate
         self._etag = etag
         self._permissions = permissions
         self._isDownloaded = isDownloaded

@@ -45,11 +45,15 @@ struct Scenario
     NSString *reportedIdentifier = nil;
     bool holdDiscovery = false;
     bool holdClear = false;
+    bool holdStatus = false;
+    NSDictionary *statusOverrides = nil;
+    NSMutableArray *statusReplies = [NSMutableArray new];
     int additions = 0;
     int removals = 0;
     int disconnections = 0;
     int reconnections = 0;
     int connections = 0;
+    NSMutableDictionary *connectionsByDomain = [NSMutableDictionary new];
     QHash<QString, QString> configuredPaths;
     QHash<QString, QString> configuredUsers;
 };
@@ -65,6 +69,38 @@ NSError *failure()
 @property NSString *domainId;
 @end
 @implementation TestProviderProxy
+- (void)getSyncStatusWithCompletionHandler:(void (^)(NSDictionary<NSString *, id> *, NSError *))reply
+{
+    NSMutableDictionary *status = [@{
+        @"schemaVersion" : @1,
+        @"domainIdentifier" : self.domainId,
+        @"activeUploads" : @0,
+        @"activeDownloads" : @0,
+        @"activeMetadata" : @0,
+        @"pendingItems" : @0,
+        @"errorCount" : @0,
+        @"uploadedBytes" : @0,
+        @"uploadTotalBytes" : @0,
+        @"downloadedBytes" : @0,
+        @"downloadTotalBytes" : @0,
+        @"isAuthenticated" : @YES,
+        @"isSynced" : @YES,
+        @"pendingKnown" : @YES,
+        @"pendingTruncated" : @NO,
+        @"sampledAt" : @(NSDate.date.timeIntervalSince1970),
+        @"lastCheckedAt" : @(NSDate.date.timeIntervalSince1970),
+        @"lastSyncedAt" : @(NSDate.date.timeIntervalSince1970),
+        @"errorDescription" : @""
+    } mutableCopy];
+    if (scenario.statusOverrides) {
+        [status addEntriesFromDictionary:scenario.statusOverrides];
+    }
+    if (scenario.holdStatus) {
+        [scenario.statusReplies addObject:[^{ reply(status, nil); } copy]];
+    } else {
+        reply(status, nil);
+    }
+}
 - (void)getFileProviderDomainIdentifierWithCompletionHandler:(void (^)(NSString *, NSError *))reply
 {
     reply(scenario.reportedIdentifier ? scenario.reportedIdentifier : self.domainId, nil);
@@ -164,6 +200,7 @@ NSError *failure()
     TestProviderConnection *connection = [TestProviderConnection new];
     connection.proxy = [TestProviderProxy new];
     connection.proxy.domainId = self.domainId;
+    scenario.connectionsByDomain[self.domainId] = connection;
     reply((NSXPCConnection *)connection, nil);
 }
 @end
@@ -212,6 +249,11 @@ void addDomain(id, SEL, NSFileProviderDomain *domain, void (^reply)(NSError *))
     ++scenario.additions;
     void (^complete)(void) = ^{
         if (!scenario.addError) {
+            for (NSFileProviderDomain *existing in [scenario.domains copy]) {
+                if ([existing.identifier isEqualToString:domain.identifier]) {
+                    [scenario.domains removeObject:existing];
+                }
+            }
             [scenario.domains addObject:domain];
         }
         reply(scenario.addError);
@@ -317,13 +359,12 @@ class TestFileProviderLifecycle : public QObject
     QString _suite;
     QList<std::pair<Method, IMP>> _methods;
 
-    AccountStatePtr createAccount(bool multipleSpaces = false)
+    AccountStatePtr createAccount(bool multipleSpaces = false, const QString &davRoot = QStringLiteral("https://dav.example.org/dav/spaces/"))
     {
         QJsonArray values;
-        auto add = [&values](const QString &id, const QString &type) {
+        auto add = [&values, &davRoot](const QString &id, const QString &type) {
             values.append(QJsonObject{{QStringLiteral("id"), id}, {QStringLiteral("name"), id}, {QStringLiteral("driveType"), type},
-                {QStringLiteral("root"),
-                    QJsonObject{{QStringLiteral("id"), id}, {QStringLiteral("webDavUrl"), QStringLiteral("https://dav.example.org/dav/spaces/%1").arg(id)}}}});
+                {QStringLiteral("root"), QJsonObject{{QStringLiteral("id"), id}, {QStringLiteral("webDavUrl"), QString(davRoot + id)}}}});
         };
         add(QStringLiteral("personal-space"), QStringLiteral("personal"));
         if (multipleSpaces) {
@@ -344,7 +385,14 @@ class TestFileProviderLifecycle : public QObject
 
     void addExisting(const QString &id)
     {
-        [scenario.domains addObject:[[NSFileProviderDomain alloc] initWithIdentifier:id.toNSString() displayName:@"Isolated test domain"]];
+        NSFileProviderDomain *domain = [[NSFileProviderDomain alloc] initWithIdentifier:id.toNSString() displayName:@"Isolated test domain"];
+        if (@available(macOS 26.0, *)) {
+            domain.supportsStringSearchRequest = YES;
+        }
+        if (@available(macOS 13.0, *)) {
+            domain.supportsSyncingTrash = YES;
+        }
+        [scenario.domains addObject:domain];
     }
 
 private Q_SLOTS:
@@ -387,6 +435,27 @@ private Q_SLOTS:
         [defaults removePersistentDomainForName:_suite.toNSString()];
         [defaults synchronize];
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+
+    void testCredentialRevocationPersistence()
+    {
+        const auto domain = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        QVERIFY(FileProviderXPC::recordAccountRemoval(domain, _suite));
+        const auto suite = (__bridge CFStringRef)_suite.toNSString();
+        QVERIFY(CFPreferencesSynchronize(suite, kCFPreferencesCurrentUser, kCFPreferencesAnyHost));
+        auto generation = CFPreferencesCopyValue((__bridge CFStringRef)[@"fp_config_generation_" stringByAppendingString:domain.toNSString()], suite,
+            kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+        QVERIFY(generation);
+        const QString firstGeneration = QString::fromNSString((__bridge NSString *)generation);
+        CFRelease(generation);
+        QVERIFY(!QUuid(firstGeneration).isNull());
+        auto removed = CFPreferencesCopyValue(
+            (__bridge CFStringRef)[@"fp_removed_domain_" stringByAppendingString:domain.toNSString()], suite, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+        QVERIFY(removed && CFEqual(removed, kCFBooleanTrue));
+        CFRelease(removed);
+        QVERIFY(FileProviderXPC::recordAccountRemoval(domain, _suite));
+        NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:_suite.toNSString()];
+        QVERIFY(QString::fromNSString([defaults stringForKey:[@"fp_config_generation_" stringByAppendingString:domain.toNSString()]]) != firstGeneration);
     }
 
     void testDomainIdentityAndIsolation()
@@ -432,6 +501,35 @@ private Q_SLOTS:
             const auto id = fileProviderDomainIdentifier(account->account()->uuid(), space, false);
             QCOMPARE(scenario.configuredPaths.value(id), QStringLiteral("https://dav.example.org/dav/spaces/") + space);
             QCOMPARE(scenario.configuredUsers.value(id), personal);
+        }
+    }
+
+    void testVirtualSharesKeepsDomainWithoutUnsupportedCapabilities()
+    {
+        const auto account = createAccount(true);
+        QTRY_VERIFY(account->account()->spacesManager()->isReady());
+        const auto personal = account->account()->uuid().toString(QUuid::WithoutBraces);
+        const auto project = fileProviderDomainIdentifier(account->account()->uuid(), QStringLiteral("project-space"), false);
+        const auto shares = fileProviderDomainIdentifier(account->account()->uuid(), QStringLiteral("shares-space"), false);
+        for (const auto &id : {personal, project, shares}) {
+            addExisting(id);
+        }
+        FileProviderXPC xpc(nullptr, _suite);
+        FileProviderDomainManager domains(nullptr, &xpc);
+        connect(&domains, &FileProviderDomainManager::domainSetupComplete, &xpc, &FileProviderXPC::connectToFileProviderDomains);
+        domains.start();
+        QTRY_COMPARE(scenario.configuredPaths.size(), 3);
+        QTRY_COMPARE(scenario.additions, 1);
+        QCOMPARE(scenario.removals, 0);
+        QCOMPARE(scenario.domains.count, 3UL);
+        for (NSFileProviderDomain *domain in scenario.domains) {
+            const bool physical = QString::fromNSString(domain.identifier) != shares;
+            if (@available(macOS 26.0, *)) {
+                QCOMPARE(bool(domain.supportsStringSearchRequest), physical);
+            }
+            if (@available(macOS 13.0, *)) {
+                QCOMPARE(bool(domain.supportsSyncingTrash), physical);
+            }
         }
     }
 
@@ -488,10 +586,158 @@ private Q_SLOTS:
         const auto account = createAccount();
         QTRY_VERIFY(account->account()->spacesManager()->isReady());
         scenario.addError = failure();
-        _provider = FileProvider::instance();
+        _provider = new FileProvider(nullptr, _suite);
         QTRY_VERIFY(!_provider->error().isEmpty());
         QVERIFY(_provider->error().contains(QStringLiteral("Injected native failure")));
         QVERIFY(!_provider->ready());
+    }
+
+    void testSyncStatusRequiresObservedIdleAndRejectsStaleSnapshots()
+    {
+        const auto account = createAccount();
+        QTRY_VERIFY(account->account()->spacesManager()->isReady());
+        scenario.holdStatus = true;
+        _provider = new FileProvider(nullptr, _suite);
+        QTRY_VERIFY(scenario.statusReplies.count > 0);
+        QVERIFY(!_provider->ready()); // Credentials alone cannot prove synchronization.
+        void (^reply)(void) = scenario.statusReplies.firstObject;
+        reply();
+        QTRY_VERIFY(_provider->ready());
+        QVERIFY(_provider->syncStatusText().contains(QStringLiteral("Last synced:")));
+        scenario.holdStatus = false;
+        scenario.statusOverrides = @{@"activeUploads" : @1, @"uploadedBytes" : @256, @"uploadTotalBytes" : @1024};
+        _provider->xpc()->refreshSyncStatus();
+        QTRY_VERIFY(!_provider->ready());
+        QVERIFY(_provider->syncStatusText().contains(QStringLiteral("Uploading: 1")));
+        scenario.statusOverrides = @{@"errorCount" : @1, @"errorDescription" : @"Upload denied"};
+        _provider->xpc()->refreshSyncStatus();
+        QTRY_VERIFY(_provider->error().contains(QStringLiteral("Upload denied")));
+        scenario.statusOverrides = @{@"pendingKnown" : @NO};
+        _provider->xpc()->refreshSyncStatus();
+        QTRY_VERIFY(_provider->error().isEmpty());
+        QVERIFY(!_provider->ready());
+        scenario.statusOverrides = @{@"sampledAt" : @1};
+        _provider->xpc()->refreshSyncStatus();
+        QTRY_VERIFY(!_provider->error().isEmpty());
+        QVERIFY(!_provider->ready());
+    }
+
+    void testRoutineInvalidationOnlyRechecksAffectedDomain()
+    {
+        const auto account = createAccount(true);
+        QTRY_VERIFY(account->account()->spacesManager()->isReady());
+        _provider = new FileProvider(nullptr, _suite);
+        QTRY_VERIFY(_provider->ready());
+        QCOMPARE(scenario.connections, 3);
+        const auto personal = account->account()->uuid().toString(QUuid::WithoutBraces);
+        const auto project = fileProviderDomainIdentifier(account->account()->uuid(), QStringLiteral("project-space"), false);
+        TestProviderConnection *connection = scenario.connectionsByDomain[personal.toNSString()];
+        TestProviderConnection *healthy = scenario.connectionsByDomain[project.toNSString()];
+        void (^staleInvalidation)(void) = connection.invalidationHandler;
+        staleInvalidation();
+        QTRY_VERIFY(!_provider->ready());
+        QVERIFY(_provider->error().isEmpty());
+        QVERIFY(_provider->syncStatusText().contains(QStringLiteral("Checking on-demand sync status")));
+        QVERIFY(healthy.invalidationHandler != nil);
+        QTRY_VERIFY(_provider->ready());
+        QCOMPARE(scenario.connections, 4);
+        QVERIFY(scenario.connectionsByDomain[project.toNSString()] == healthy);
+        staleInvalidation();
+        QTest::qWait(20);
+        QVERIFY(_provider->ready());
+        QCOMPARE(scenario.connections, 4);
+
+        Q_EMIT _provider->xpc()->domainStatusChanged(personal, QStringLiteral("Real configuration failure"));
+        connection = scenario.connectionsByDomain[personal.toNSString()];
+        connection.invalidationHandler();
+        QTRY_VERIFY(connection.invalidationHandler == nil);
+        QVERIFY(_provider->error().contains(QStringLiteral("Real configuration failure")));
+        scenario.reportedIdentifier = @"unexpected-domain";
+        QTRY_VERIFY(_provider->error().contains(QStringLiteral("unexpected domain identity")));
+        QVERIFY(!_provider->ready());
+    }
+
+    void testLateSyncStatusCannotReviveSignedOutDomain()
+    {
+        const auto account = createAccount();
+        QTRY_VERIFY(account->account()->spacesManager()->isReady());
+        scenario.holdStatus = true;
+        _provider = new FileProvider(nullptr, _suite);
+        QTRY_VERIFY(scenario.statusReplies.count > 0);
+        void (^reply)(void) = scenario.statusReplies.firstObject;
+        const auto domainId = account->account()->uuid().toString(QUuid::WithoutBraces);
+        _provider->xpc()->clearAccountConfiguration(domainId, {});
+        reply();
+        QTest::qWait(20);
+        QVERIFY(!_provider->ready());
+        QVERIFY(!_provider->syncStatusText().contains(QStringLiteral("Last synced:")));
+    }
+
+    void testSyncStatusSnapshotValidation()
+    {
+        const auto now = QDateTime::currentDateTimeUtc();
+        QJsonObject status{{QStringLiteral("schemaVersion"), 1}, {QStringLiteral("domainIdentifier"), QStringLiteral("domain")},
+            {QStringLiteral("isAuthenticated"), true}, {QStringLiteral("isSynced"), true}, {QStringLiteral("pendingKnown"), true},
+            {QStringLiteral("pendingTruncated"), false}};
+        for (const auto &key : {"activeUploads", "activeDownloads", "activeMetadata", "pendingItems", "errorCount", "uploadedBytes", "uploadTotalBytes",
+                 "downloadedBytes", "downloadTotalBytes", "lastCheckedAt", "lastSyncedAt"}) {
+            status.insert(QLatin1String(key), 0);
+        }
+        status.insert(QStringLiteral("sampledAt"), now.toSecsSinceEpoch());
+        const auto parsed = FileProviderSyncStatus::parse(QStringLiteral("domain"), status, now);
+        QVERIFY(parsed);
+        QVERIFY(!parsed->idle(now));
+        QVERIFY(!parsed->fresh(now.addSecs(11)));
+        QVERIFY(!FileProviderSyncStatus::parse(QStringLiteral("other"), status, now));
+        status.insert(QStringLiteral("pendingItems"), -1);
+        QVERIFY(!FileProviderSyncStatus::parse(QStringLiteral("domain"), status, now));
+    }
+
+    void testExistingDomainReceivesSearchCapabilities()
+    {
+        if (@available(macOS 26.0, *)) {
+            const auto account = createAccount();
+            QTRY_VERIFY(account->account()->spacesManager()->isReady());
+            addExisting(account->account()->uuid().toString(QUuid::WithoutBraces));
+            scenario.domains.firstObject.supportsStringSearchRequest = NO;
+            FileProviderXPC xpc(nullptr, _suite);
+            FileProviderDomainManager domains(nullptr, &xpc);
+            domains.start();
+            QTRY_COMPARE(scenario.additions, 1);
+            QTRY_COMPARE(scenario.domains.count, 1UL);
+            QVERIFY(scenario.domains.firstObject.supportsStringSearchRequest);
+            QVERIFY(scenario.domains.firstObject.supportsSyncingTrash);
+        } else {
+            QSKIP("Finder string search requires macOS 26");
+        }
+    }
+
+    void testSearchCapabilityMatchesSpaceDAVEndpoint_data()
+    {
+        QTest::addColumn<QString>("davRoot");
+        QTest::addColumn<bool>("supportsSearch");
+        QTest::newRow("space") << QStringLiteral("https://dav.example.org/dav/spaces/") << true;
+        QTest::newRow("deployment-prefix") << QStringLiteral("https://dav.example.org/cloud/dav/spaces/") << true;
+        QTest::newRow("generic-webdav") << QStringLiteral("https://dav.example.org/remote.php/webdav/") << false;
+        QTest::newRow("subfolder") << QStringLiteral("https://dav.example.org/dav/spaces/drive/subfolder/") << false;
+    }
+
+    void testSearchCapabilityMatchesSpaceDAVEndpoint()
+    {
+        if (@available(macOS 26.0, *)) {
+            QFETCH(QString, davRoot);
+            QFETCH(bool, supportsSearch);
+            const auto account = createAccount(false, davRoot);
+            QTRY_VERIFY(account->account()->spacesManager()->isReady());
+            FileProviderXPC xpc(nullptr, _suite);
+            FileProviderDomainManager domains(nullptr, &xpc);
+            domains.start();
+            QTRY_COMPARE(scenario.domains.count, 1UL);
+            QCOMPARE(bool(scenario.domains.firstObject.supportsStringSearchRequest), supportsSearch);
+            QCOMPARE(bool(scenario.domains.firstObject.supportsSyncingTrash), supportsSearch);
+        } else {
+            QSKIP("Finder string search requires macOS 26");
+        }
     }
 
     void testDeletionWaitsForCredentialAcknowledgment()

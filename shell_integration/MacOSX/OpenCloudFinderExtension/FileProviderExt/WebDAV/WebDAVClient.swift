@@ -22,10 +22,10 @@ actor WebDAVClient {
     private let logger = Logger(subsystem: "eu.opencloud.desktop.FileProviderExt", category: "WebDAVClient")
     
     /// Server base URL (e.g., "https://cloud.example.com")
-    private let serverURL: URL
+    let serverURL: URL
     
     /// WebDAV endpoint path (typically "/remote.php/webdav")
-    private let davPath: String
+    let davPath: String
     
     /// Username for authentication
     private let username: String
@@ -37,7 +37,7 @@ actor WebDAVClient {
     private let useBearer: Bool
     
     /// URL session for network requests
-    private let session: URLSession
+    let session: URLSession
     
     /// User agent string
     private let userAgent = "OpenCloud-macOS/FileProviderExt"
@@ -67,6 +67,17 @@ actor WebDAVClient {
 
     /// Base delay for exponential backoff (seconds)
     private static let baseRetryDelay: TimeInterval = 1.0
+
+    /// OpenCloud's synthetic Shares jail has ordinary DAV listing support but
+    /// no storage recycle bin or independently searchable space index.
+    nonisolated static func isVirtualSharesPath(_ path: String) -> Bool {
+        let normalized = "/" + path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let range = normalized.range(of: "/dav/spaces/", options: .backwards) else { return false }
+        let space = String(normalized[range.upperBound...])
+        let spaceID = space.split(separator: "$", omittingEmptySubsequences: false).last?
+            .split(separator: "!", omittingEmptySubsequences: false).first.map(String.init)
+        return spaceID == "a0ca6a90-a365-4782-871e-d44447bbc668"
+    }
 
     init(serverURL: URL, davPath: String = "/remote.php/webdav", username: String, password: String, useBearer: Bool = false, sessionConfiguration: URLSessionConfiguration? = nil) {
         self.serverURL = serverURL
@@ -132,7 +143,7 @@ actor WebDAVClient {
     }
     
     /// Create full URL for a remote path
-    private func url(for remotePath: String) -> URL? {
+    func url(for remotePath: String) -> URL? {
         var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false)
         
         // Join the configured root with exactly one separator. A common
@@ -151,7 +162,7 @@ actor WebDAVClient {
     }
     
     /// Add authentication and common headers to request
-    private func authenticatedRequest(url: URL, method: String) -> URLRequest {
+    func authenticatedRequest(url: URL, method: String) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = method
         
@@ -210,11 +221,15 @@ actor WebDAVClient {
         }
 
         logger.debug("PROPFIND response: \(httpResponse.statusCode)")
+        if httpResponse.statusCode != 207 {
+            logger.error("PROPFIND failed HTTP \(httpResponse.statusCode, privacy: .public)")
+        }
 
         switch httpResponse.statusCode {
         case 207: // Multi-Status
             let parser = WebDAVXMLParser(baseURL: url)
             guard let items = parser.parse(data: data) else {
+                logger.error("PROPFIND invalid multistatus response")
                 throw WebDAVError.parseError("Failed to parse PROPFIND response")
             }
             logger.debug("Parsed \(items.count) items from PROPFIND")
@@ -224,6 +239,7 @@ actor WebDAVClient {
             guard let index = items.firstIndex(where: {
                 $0.remotePath.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == requestedPath
             }) else {
+                logger.error("PROPFIND response omitted requested resource")
                 throw WebDAVError.parseError("PROPFIND omitted the requested resource")
             }
             var ordered = items
@@ -262,7 +278,12 @@ actor WebDAVClient {
             request.setValue(Self.quotedETag(etag), forHTTPHeaderField: "If-Match")
         }
 
-        let (tempURL, response) = try await session.download(for: request)
+        progress?.kind = .file
+        progress?.fileOperationKind = .downloading
+        progress?.fileTotalCount = 1
+        progress?.completedUnitCount = 0
+        let transfer = TransferProgressDelegate(progress: progress)
+        let (tempURL, response) = try await session.download(for: request, delegate: transfer)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw WebDAVError.networkError(NSError(domain: "WebDAV", code: -1, userInfo: nil))
@@ -296,14 +317,14 @@ actor WebDAVClient {
     
     /// Upload a file from a local URL
     /// - Parameter ifMatchEtag: If set, sends If-Match header for conflict detection (412 on mismatch)
-    func uploadFile(from localURL: URL, to remotePath: String, ifMatchEtag: String? = nil, ifNoneMatch: Bool = false, progress: Progress? = nil) async throws -> WebDAVItem? {
+    func uploadFile(from localURL: URL, to remotePath: String, ifMatchEtag: String? = nil, ifNoneMatch: Bool = false, progress: Progress? = nil, modificationDate: Date? = nil) async throws -> WebDAVItem? {
         try await withRetry {
-            try await self.performUploadFile(from: localURL, to: remotePath, ifMatchEtag: ifMatchEtag, ifNoneMatch: ifNoneMatch, progress: progress)
+            try await self.performUploadFile(from: localURL, to: remotePath, ifMatchEtag: ifMatchEtag, ifNoneMatch: ifNoneMatch, progress: progress, modificationDate: modificationDate)
         }
         return try await listDirectory(path: remotePath).first
     }
 
-    private func performUploadFile(from localURL: URL, to remotePath: String, ifMatchEtag: String?, ifNoneMatch: Bool, progress: Progress?) async throws {
+    private func performUploadFile(from localURL: URL, to remotePath: String, ifMatchEtag: String?, ifNoneMatch: Bool, progress: Progress?, modificationDate: Date?) async throws {
         guard let url = url(for: remotePath) else {
             throw WebDAVError.invalidURL
         }
@@ -311,6 +332,13 @@ actor WebDAVClient {
         logger.debug("PUT \(localURL.path) -> \(url.absoluteString)")
 
         var request = authenticatedRequest(url: url, method: "PUT")
+        if let date = modificationDate {
+            let timestamp = date.timeIntervalSince1970.rounded(.down)
+            guard timestamp.isFinite, timestamp > Double(Int64.min), timestamp < Double(Int64.max) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            request.setValue(String(Int64(timestamp)), forHTTPHeaderField: "X-OC-Mtime")
+        }
 
         // FileProvider content URLs are temporary files and may have no useful
         // extension. The remote filename determines the uploaded media type.
@@ -328,7 +356,14 @@ actor WebDAVClient {
         }
 
         // Stream from file instead of loading into memory to avoid OOM on large files
-        let (_, response) = try await session.upload(for: request, fromFile: localURL)
+        progress?.kind = .file
+        progress?.fileOperationKind = .uploading
+        progress?.fileTotalCount = 1
+        let size = (try localURL.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
+        progress?.totalUnitCount = Int64(max(1, size))
+        progress?.completedUnitCount = 0
+        let transfer = TransferProgressDelegate(progress: progress)
+        let (_, response) = try await session.upload(for: request, fromFile: localURL, delegate: transfer)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw WebDAVError.networkError(NSError(domain: "WebDAV", code: -1, userInfo: nil))
@@ -359,7 +394,7 @@ actor WebDAVClient {
     
     /// Preserve a local edit under a separate name when the original changed
     /// remotely. Every write is create-only; neither remote version is overwritten.
-    func uploadConflictCopy(from localURL: URL, directory: String, filename: String, progress: Progress? = nil) async throws -> WebDAVItem {
+    func uploadConflictCopy(from localURL: URL, directory: String, filename: String, progress: Progress? = nil, modificationDate: Date? = nil) async throws -> WebDAVItem {
         guard let contentHash = SHA256.hash(contentsOf: localURL) else { throw CocoaError(.fileReadUnknown) }
         let digest = contentHash.map { String(format: "%02x", $0) }.joined()
         let pathExtension = (filename as NSString).pathExtension
@@ -374,7 +409,7 @@ actor WebDAVClient {
             let copyName = keptStem + marker + keptExtension
             let path = directory.hasSuffix("/") ? directory + copyName : directory + "/" + copyName
             do {
-                guard let item = try await uploadFile(from: localURL, to: path, ifNoneMatch: true, progress: progress) else {
+                guard let item = try await uploadFile(from: localURL, to: path, ifNoneMatch: true, progress: progress, modificationDate: modificationDate) else {
                     throw WebDAVError.parseError("Conflict copy metadata missing")
                 }
                 return item
@@ -540,3 +575,66 @@ actor WebDAVClient {
 }
 
 import UniformTypeIdentifiers
+
+extension WebDAVClient {
+    /// The space-specific REPORT route sets the server's resource scope. The
+    /// search pattern contains only the user's filename query.
+    func searchFiles(query: String, limit: Int) async throws -> [WebDAVItem] {
+        guard let range = davPath.range(of: "/dav/spaces/", options: .backwards) else {
+            throw CocoaError(.featureUnsupported)
+        }
+        let space = String(davPath[range.upperBound...])
+        guard !space.isEmpty, !space.contains("/"), !Self.isVirtualSharesPath(davPath) else { throw CocoaError(.featureUnsupported) }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        guard trimmed.utf8.count <= 4096 else { throw CocoaError(.fileReadTooLarge) }
+
+        func quoted(_ value: String) -> String {
+            value.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+        }
+        func xml(_ value: String) -> String {
+            value.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+        }
+        var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false)
+        components?.path = davPath
+        guard let endpoint = components?.url else { throw WebDAVError.invalidURL }
+        let pattern = "name:\"*\(quoted(trimmed))*\""
+        var request = authenticatedRequest(url: endpoint, method: "REPORT")
+        request.setValue("application/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("""
+        <?xml version="1.0" encoding="UTF-8"?>
+        <oc:search-files xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+        <d:prop><d:displayname/><d:getetag/><d:getcontentlength/><d:getcontenttype/>
+        <d:resourcetype/><d:getlastmodified/><d:creationdate/><oc:id/><oc:fileid/>
+        <oc:permissions/><oc:owner-id/><oc:owner-display-name/></d:prop>
+        <oc:search><oc:pattern>\(xml(pattern))</oc:pattern><oc:limit>\(min(max(limit, 1), 1000))</oc:limit></oc:search>
+        </oc:search-files>
+        """.utf8)
+        return try await withRetry {
+            let (data, response) = try await self.session.data(for: request)
+            guard let response = response as? HTTPURLResponse else { throw WebDAVError.serverError }
+            switch response.statusCode {
+            case 207:
+                guard let items = WebDAVXMLParser(baseURL: endpoint).parse(data: data) else {
+                    throw WebDAVError.parseError("Invalid search response")
+                }
+                // Never publish another domain's results, even if a server
+                // ignores the query scope or returns an overbroad response.
+                var seen = Set<String>()
+                return Array(items.filter {
+                    $0.remotePath.hasPrefix(self.davPath + "/")
+                        && !$0.remotePath.split(separator: "/").contains(where: { $0 == "." || $0 == ".." })
+                        && seen.insert($0.ocId).inserted
+                }.prefix(min(max(limit, 1), 1000)))
+            case 401: throw WebDAVError.notAuthenticated
+            case 403: throw WebDAVError.permissionDenied
+            case 404, 405, 501: throw CocoaError(.featureUnsupported)
+            case 500...599: throw WebDAVError.serverError
+            default: throw WebDAVError.httpError(statusCode: response.statusCode, message: nil)
+            }
+        }
+    }
+}

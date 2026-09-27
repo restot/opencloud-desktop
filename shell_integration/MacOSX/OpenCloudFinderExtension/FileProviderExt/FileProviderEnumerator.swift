@@ -73,7 +73,7 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         let parent = metadata.parentOcId == ItemDatabase.rootContainerId
             ? NSFileProviderItemIdentifier.rootContainer
             : NSFileProviderItemIdentifier(metadata.parentOcId)
-        return FileProviderItem(metadata: metadata, parentItemIdentifier: parent)
+        return FileProviderItem(metadata: metadata, parentItemIdentifier: parent, supportsTrash: fpExtension?.supportsTrash ?? false)
     }
 
     private func directory(ext: FileProviderExtension, webdav: WebDAVClient, database: ItemDatabase) async throws -> (path: String, parent: String) {
@@ -107,6 +107,9 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     }
 
     private func refreshDirectory(path: String, parent: String, webdav: WebDAVClient, database: ItemDatabase) async throws -> [ItemMetadata] {
+        if let metadata = await database.itemMetadata(ocId: parent), metadata.isTrashed {
+            return try await FileProviderTrash.refresh(webdav: webdav, database: database, parent: metadata)
+        }
         let snapshot = try await loadDirectory(path: path, parent: parent, webdav: webdav, database: database)
         if !snapshot.missing.isEmpty {
             // A child missing from one parent may have moved to another. Reconcile
@@ -115,7 +118,9 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         }
         for missing in snapshot.missing {
             try Task.checkCancellation()
+            let retirement = await fpExtension?.syncStatus.removalScope(metadata: missing, database: database)
             try await database.deleteIfUnchanged(missing)
+            if let retirement { await fpExtension?.syncStatus.retireRemovedItems(retirement, database: database) }
         }
         return await database.childItems(parentOcId: parent)
     }
@@ -123,6 +128,11 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     private func refreshWorkingSet(webdav: WebDAVClient, database: ItemDatabase) async throws {
         // Refresh known folders, including parents of materialized nested files.
         // Opening another Finder window must not be required to discover their changes.
+        if await webdav.supportsTrash {
+            do { _ = try await FileProviderTrash.refresh(webdav: webdav, database: database) }
+            catch WebDAVError.fileNotFound { /* The server may not offer an optional trash endpoint. */ }
+            catch let error as CocoaError where error.code == .featureUnsupported {}
+        }
         let root = try await loadDirectory(path: "/", parent: ItemDatabase.rootContainerId, webdav: webdav, database: database)
         var missing = root.missing
         var cursor: String?
@@ -130,7 +140,7 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             let page = try await database.itemsPage(parentOcId: nil, after: cursor, limit: Self.pageSize, directoriesOnly: true)
             for directory in page.items {
                 try Task.checkCancellation()
-                guard let current = await database.itemMetadata(ocId: directory.ocId) else { continue }
+                guard let current = await database.itemMetadata(ocId: directory.ocId), !current.isTrashed else { continue }
                 do {
                     let snapshot = try await loadDirectory(path: current.remotePath, parent: current.ocId, webdav: webdav, database: database)
                     missing.append(contentsOf: snapshot.missing)
@@ -144,7 +154,9 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         // parents keeps its descendants and their local state.
         for item in missing {
             try Task.checkCancellation()
+            let retirement = await fpExtension?.syncStatus.removalScope(metadata: item, database: database)
             try await database.deleteIfUnchanged(item)
+            if let retirement { await fpExtension?.syncStatus.retireRemovedItems(retirement, database: database) }
         }
     }
 
@@ -154,6 +166,7 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             return
         }
         startOperation {
+            let activity = ext.syncStatus.begin(.metadata, key: "enumerate:" + self.enumeratedItemIdentifier.rawValue)
             do {
                 try Task.checkCancellation()
                 guard ext.isAuthenticated, let webdav = ext.webdavClient, let database = ext.database else {
@@ -175,6 +188,7 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 let parent: String?
                 switch self.enumeratedItemIdentifier {
                 case .trashContainer:
+                    if initial, await webdav.supportsTrash { _ = try await FileProviderTrash.refresh(webdav: webdav, database: database) }
                     parent = NSFileProviderItemIdentifier.trashContainer.rawValue
                 case .workingSet:
                     if initial { try await self.refreshWorkingSet(webdav: webdav, database: database) }
@@ -190,9 +204,13 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                     NSFileProviderPage(try JSONEncoder().encode(Page(container: self.enumeratedItemIdentifier.rawValue, epoch: epoch, after: $0)))
                 }
                 observer.didEnumerate(result.items.map(self.item))
+                if initial && self.enumeratedItemIdentifier != .trashContainer { ext.remoteCheckSucceeded() }
+                ext.syncStatus.finish(activity, error: nil, checkedRemote: initial && self.enumeratedItemIdentifier == .workingSet)
                 observer.finishEnumerating(upTo: next)
             } catch {
-                self.logger.error("Enumeration failed: \(error.localizedDescription)")
+                ext.syncStatus.finish(activity, error: self.providerError(error))
+                let container = self.enumeratedItemIdentifier == .rootContainer ? "root" : self.enumeratedItemIdentifier == .workingSet ? "working-set" : self.enumeratedItemIdentifier == .trashContainer ? "trash" : "directory"
+                self.logger.error("Enumeration failed [\(container, privacy: .public)]: \(fileProviderErrorDiagnostic(error), privacy: .public)")
                 observer.finishEnumeratingWithError(self.providerError(error))
             }
         }
@@ -204,6 +222,7 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             return
         }
         startOperation {
+            let activity = ext.syncStatus.begin(.metadata, key: "enumerate:" + self.enumeratedItemIdentifier.rawValue)
             do {
                 try Task.checkCancellation()
                 guard ext.isAuthenticated, let webdav = ext.webdavClient, let database = ext.database else {
@@ -213,7 +232,7 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 let parent: String?
                 switch self.enumeratedItemIdentifier {
                 case .trashContainer:
-                    // Trash is empty, but still validate and preserve the database anchor.
+                    if await webdav.supportsTrash { _ = try await FileProviderTrash.refresh(webdav: webdav, database: database) }
                     parent = NSFileProviderItemIdentifier.trashContainer.rawValue
                 case .workingSet:
                     try await self.refreshWorkingSet(webdav: webdav, database: database)
@@ -227,9 +246,12 @@ class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 try Task.checkCancellation()
                 observer.didUpdate(changes.updated.map(self.item))
                 observer.didDeleteItems(withIdentifiers: changes.deleted.map { NSFileProviderItemIdentifier($0) })
+                ext.remoteCheckSucceeded()
+                ext.syncStatus.finish(activity, error: nil, checkedRemote: self.enumeratedItemIdentifier == .workingSet)
                 observer.finishEnumeratingChanges(upTo: NSFileProviderSyncAnchor(changes.anchor), moreComing: changes.moreComing)
             } catch {
-                self.logger.error("Change enumeration failed: \(error.localizedDescription)")
+                ext.syncStatus.finish(activity, error: self.providerError(error))
+                self.logger.error("Change enumeration failed: \(fileProviderErrorDiagnostic(error), privacy: .public)")
                 observer.finishEnumeratingWithError(self.providerError(error))
             }
         }

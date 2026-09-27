@@ -81,6 +81,10 @@ struct ItemMetadata: Sendable, Equatable {
     /// Timestamp when this metadata was last synced from server
     var syncTime: Date
     
+    /// Finder metadata is private to this account and device.
+    var finderMetadata = FinderMetadata()
+    var isTrashed: Bool { finderMetadata.trash != nil }
+
     /// Computed parent path from remote path
     var parentPath: String {
         let normalizedPath = remotePath.hasSuffix("/") ? String(remotePath.dropLast()) : remotePath
@@ -138,7 +142,8 @@ struct ItemMetadata: Sendable, Equatable {
         isUploading: Bool,
         status: ItemStatus,
         statusError: String?,
-        syncTime: Date
+        syncTime: Date,
+        finderMetadata: FinderMetadata = FinderMetadata()
     ) {
         self.ocId = ocId
         self.fileId = fileId
@@ -161,6 +166,7 @@ struct ItemMetadata: Sendable, Equatable {
         self.status = status
         self.statusError = statusError
         self.syncTime = syncTime
+        self.finderMetadata = finderMetadata
     }
 }
 
@@ -171,4 +177,38 @@ enum ItemStatus: Int, Sendable {
     case uploading = 2
     case downloadError = 3
     case uploadError = 4
+}
+
+/// User-private metadata supplied by Finder. It is not published as shared DAV properties.
+struct FinderMetadata: Codable, Sendable, Equatable {
+    var tagData: Data?
+    var lastUsedDate: Date?
+    var creationDate: Date?
+    var contentModificationDate: Date?
+    var trash: TrashMetadata?
+    var contentPolicy: Int = 0
+    var fileSystemFlags: UInt?
+    var extendedAttributes: [String: Data]?
+
+    enum Field: Hashable, Sendable {
+        case tagData, lastUsedDate, contentPolicy, fileSystemFlags, extendedAttributes, creationDate, contentModificationDate, trash
+    }
+
+    mutating func apply(_ value: FinderMetadata, fields: Set<Field>) {
+        if fields.contains(.creationDate) { creationDate = value.creationDate }
+        if fields.contains(.contentModificationDate) { contentModificationDate = value.contentModificationDate }
+        if fields.contains(.trash) { trash = value.trash }
+        if fields.contains(.tagData) { tagData = value.tagData }
+        if fields.contains(.lastUsedDate) { lastUsedDate = value.lastUsedDate }
+        if fields.contains(.contentPolicy) { contentPolicy = value.contentPolicy }
+        if fields.contains(.fileSystemFlags) { fileSystemFlags = value.fileSystemFlags }
+        if fields.contains(.extendedAttributes) { extendedAttributes = value.extendedAttributes }
+    }
+}
+
+struct TrashMetadata: Codable, Sendable, Equatable {
+    let key: String
+    let originalPath: String
+    let originalParentOcId: String
+    let deletionDate: Date?
 }

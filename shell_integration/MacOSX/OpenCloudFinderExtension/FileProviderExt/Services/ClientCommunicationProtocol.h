@@ -28,6 +28,9 @@
  */
 - (void)getFileProviderDomainIdentifierWithCompletionHandler:(void (^)(NSString *domainIdentifier, NSError *error))completionHandler;
 
+/** Read the current domain activity, pending items and last verified sync times. */
+- (void)getSyncStatusWithCompletionHandler:(void (^)(NSDictionary<NSString *, id> *status, NSError *error))completionHandler;
+
 /**
  * Configure account credentials for this FileProvider domain.
  * @param davPath The WebDAV path on the server (e.g., "/dav/spaces/<spaceId>" or "/remote.php/webdav")

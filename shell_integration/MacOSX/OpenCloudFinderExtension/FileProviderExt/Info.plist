@@ -30,6 +30,41 @@
         <string>com.apple.fileprovider-nonui</string>
         <key>NSExtensionPrincipalClass</key>
         <string>$(PRODUCT_MODULE_NAME).FileProviderExtension</string>
+        <key>NSExtensionFileProviderActions</key>
+        <array>
+            <dict>
+                <key>NSExtensionFileProviderActionIdentifier</key>
+                <string>eu.opencloud.open-in-browser</string>
+                <key>NSExtensionFileProviderActionName</key>
+                <string>Open in browser</string>
+                <key>NSExtensionFileProviderActionActivationRule</key>
+                <string>fileproviderItems.@count == 1 AND SUBQUERY(fileproviderItems, $item, $item.userInfo.openCloudActions == YES).@count == 1</string>
+            </dict>
+            <dict>
+                <key>NSExtensionFileProviderActionIdentifier</key>
+                <string>eu.opencloud.share</string>
+                <key>NSExtensionFileProviderActionName</key>
+                <string>Share…</string>
+                <key>NSExtensionFileProviderActionActivationRule</key>
+                <string>fileproviderItems.@count == 1 AND SUBQUERY(fileproviderItems, $item, $item.userInfo.openCloudCanShare == YES).@count == 1</string>
+            </dict>
+            <dict>
+                <key>NSExtensionFileProviderActionIdentifier</key>
+                <string>eu.opencloud.versions</string>
+                <key>NSExtensionFileProviderActionName</key>
+                <string>Show file versions in browser</string>
+                <key>NSExtensionFileProviderActionActivationRule</key>
+                <string>fileproviderItems.@count == 1 AND SUBQUERY(fileproviderItems, $item, $item.userInfo.openCloudCanShowVersions == YES).@count == 1</string>
+            </dict>
+            <dict>
+                <key>NSExtensionFileProviderActionIdentifier</key>
+                <string>eu.opencloud.copy-private-link</string>
+                <key>NSExtensionFileProviderActionName</key>
+                <string>Copy private link</string>
+                <key>NSExtensionFileProviderActionActivationRule</key>
+                <string>fileproviderItems.@count == 1 AND SUBQUERY(fileproviderItems, $item, $item.userInfo.openCloudActions == YES).@count == 1</string>
+            </dict>
+        </array>
         <key>NSExtensionFileProviderSupportsEnumeration</key>
         <true/>
     </dict>

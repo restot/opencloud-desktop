@@ -73,7 +73,7 @@ if(APPLE)
     target_sources(testmacsocketapi PRIVATE
         ../src/gui/socketapi/socketapisocket_mac.mm
         ../src/gui/socketapi/socketapisocket_mac.h)
-    foreach(suite database webdav sockets)
+    foreach(suite database webdav sockets search status trash actions)
         add_test(NAME testfileprovider_${suite}
             COMMAND bash "${PROJECT_SOURCE_DIR}/tools/test-fileprovider-${suite}.sh")
         set_tests_properties(testfileprovider_${suite} PROPERTIES TIMEOUT 120)

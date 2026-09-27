@@ -65,6 +65,8 @@ def main():
         info = plistlib.loads(info_path.read_bytes())
         info['CFBundleIdentifier'] = bundle_id + '.FileProviderExt'
         info['CFBundleDisplayName'] = 'OpenCloud Isolated Test'
+        info['CFBundleVersion'] = '1'
+        info['CFBundleShortVersionString'] = '1.0'
         info['AppGroupIdentifier'] = group
         info['NSAppTransportSecurity'] = {'NSAllowsLocalNetworking': True}
         info['NSExtension']['NSExtensionFileProviderDocumentGroup'] = group

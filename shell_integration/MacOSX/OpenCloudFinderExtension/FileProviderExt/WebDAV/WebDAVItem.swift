@@ -98,6 +98,35 @@ extension WebDAVError {
 }
 
 /// Keep native FileProvider/Cocoa errors intact and classify transport failures once.
+func fileProviderErrorDiagnostic(_ error: Error) -> String {
+    if let error = error as? WebDAVError {
+        switch error {
+        case .invalidURL: return "dav-invalid-url"
+        case .notAuthenticated: return "dav-http-401"
+        case .httpError(let status, _): return "dav-http-\(status)"
+        case .networkError(let underlying): return "dav-" + fileProviderErrorDiagnostic(underlying)
+        case .parseError: return "dav-invalid-multistatus"
+        case .fileNotFound: return "dav-http-404"
+        case .permissionDenied: return "dav-http-403"
+        case .serverError: return "dav-http-5xx"
+        case .cancelled: return "cancelled"
+        case .conflict: return "dav-conflict"
+        }
+    }
+    let error = error as NSError
+    let category: String
+    switch error.domain {
+    case NSURLErrorDomain: category = "url"
+    case NSCocoaErrorDomain: category = "cocoa"
+    case NSFileProviderErrorDomain: category = "fileprovider"
+    case NSPOSIXErrorDomain: category = "posix"
+    default: category = "other"
+    }
+    // Only fixed categories and numeric codes are public. Underlying messages
+    // can contain account URLs, filenames or HTTP response bodies.
+    return "\(category)-\(error.code)"
+}
+
 func fileProviderError(_ error: Error, isWrite: Bool = false, itemIdentifier: NSFileProviderItemIdentifier? = nil) -> Error {
     if let error = error as? WebDAVError {
         return error.fileProviderError(isWrite: isWrite, itemIdentifier: itemIdentifier)

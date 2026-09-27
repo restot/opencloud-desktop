@@ -3,6 +3,7 @@ import FileProvider
 
 // Transport and extension doubles keep these tests independent of Finder and credentials.
 actor WebDAVClient {
+    var supportsTrash = false
     var listings: [String: [WebDAVItem]] = [:]
     var fail = false
     var failure: WebDAVError?
@@ -26,10 +27,17 @@ actor WebDAVClient {
     }
 }
 final class FileProviderExtension {
+    let syncStatus = FileProviderSyncStatus(domainIdentifier: "test")
+    func remoteCheckSucceeded() {}
+    var supportsTrash = false
     var database: ItemDatabase?
     var webdavClient: WebDAVClient?
     var isAuthenticated = true
     func resolveItemFromServer(identifier: NSFileProviderItemIdentifier, webdav: WebDAVClient, database: ItemDatabase) async throws -> ItemMetadata? { nil }
+}
+
+enum FileProviderTrash {
+    static func refresh(webdav: WebDAVClient, database: ItemDatabase, parent: ItemMetadata? = nil) async throws -> [ItemMetadata] { [] }
 }
 
 final class ChangeObserver: NSObject, NSFileProviderChangeObserver {
@@ -238,6 +246,21 @@ struct EnumeratorTests {
         let authFailure = await items(unauthenticatedEnumerator, page: NSFileProviderPage(NSFileProviderPage.initialPageSortedByName as Data))
         precondition((authFailure.error as NSError?)?.code == NSFileProviderError.notAuthenticated.rawValue,
                      "Missing authentication must fail immediately instead of polling")
+        let recoveryDB = try ItemDatabase(containerURL: container, domainIdentifier: "status-recovery")
+        let recoveryStatus = FileProviderSyncStatus(domainIdentifier: "status-recovery")
+        let removedFolder = try await recoveryDB.mergeServerMetadata(ItemMetadata(from: remote("removed-folder", path: "/removed", directory: true), parentOcId: ItemDatabase.rootContainerId))
+        _ = try await recoveryDB.mergeServerMetadata(ItemMetadata(from: remote("removed-child", path: "/removed/child"), parentOcId: removedFolder.ocId))
+        _ = try await recoveryDB.mergeServerMetadata(ItemMetadata(from: remote("moved-child", path: "/removed/moved"), parentOcId: removedFolder.ocId))
+        for key in ["modify:removed-child", "download:moved-child", "create:removed-folder/uncreated"] {
+            recoveryStatus.finish(recoveryStatus.begin(.upload, key: key), error: NSFileProviderError(.insufficientQuota))
+        }
+        let scope = await recoveryStatus.removalScope(metadata: removedFolder, database: recoveryDB)
+        _ = try await recoveryDB.mergeServerMetadata(ItemMetadata(from: remote("moved-child", path: "/safe-moved"), parentOcId: ItemDatabase.rootContainerId))
+        try await recoveryDB.deleteDirectoryAndSubdirectories(ocId: removedFolder.ocId)
+        await recoveryStatus.retireRemovedItems(scope, database: recoveryDB)
+        precondition(recoveryStatus.snapshot(isAuthenticated: true)["errorCount"] as! Int == 1,
+                     "Confirmed subtree deletion retires descendant/create failures but preserves a concurrently moved child's failure")
+
         print("FileProvider enumerator regression tests passed")
     }
 }

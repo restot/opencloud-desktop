@@ -89,6 +89,16 @@ actor ItemDatabase {
                 server_id TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS identities.idx_identity_path ON item_identities(remote_path);
+            CREATE INDEX IF NOT EXISTS identities.idx_identity_server ON item_identities(server_id);
+            CREATE TABLE IF NOT EXISTS identities.recycle_keys (
+                provider_id TEXT PRIMARY KEY,
+                recycle_key TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS identities.idx_recycle_key ON recycle_keys(recycle_key);
+            CREATE TABLE IF NOT EXISTS identities.finder_metadata (
+                provider_id TEXT PRIMARY KEY,
+                metadata TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS items (
                 oc_id TEXT PRIMARY KEY,
                 file_id TEXT NOT NULL,
@@ -117,6 +127,13 @@ actor ItemDatabase {
             CREATE INDEX IF NOT EXISTS idx_items_remote_path ON items(remote_path);
             INSERT OR IGNORE INTO identities.item_identities(provider_id, remote_path, server_id)
                 SELECT oc_id, CASE WHEN remote_path = '/' THEN '/' ELSE rtrim(remote_path, '/') END, oc_id FROM items;
+
+            INSERT OR IGNORE INTO identities.recycle_keys(provider_id, recycle_key)
+                SELECT provider_id, CASE WHEN instr(resource_id, '!') > 0 THEN substr(resource_id, instr(resource_id, '!') + 1)
+                    WHEN substr(resource_id, 1, 7) = 'fileid:' THEN substr(resource_id, 8) ELSE resource_id END
+                FROM (SELECT i.provider_id, CASE WHEN length(m.file_id) > 0 THEN m.file_id ELSE i.server_id END AS resource_id
+                    FROM identities.item_identities i LEFT JOIN items m ON m.oc_id = i.provider_id)
+                WHERE resource_id NOT LIKE 'path:%' AND resource_id NOT LIKE 'local:%' AND resource_id NOT LIKE 'trash:%';
 
             CREATE TABLE IF NOT EXISTS sync_state (epoch TEXT NOT NULL);
             INSERT INTO sync_state(epoch) SELECT lower(hex(randomblob(16)))
@@ -296,13 +313,17 @@ actor ItemDatabase {
         var merged = metadata
         let atPath = itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath))
             ?? itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath) + "/")
-        if let atPath = atPath, let fetchedAfter = fetchedAfter, atPath.syncTime > fetchedAfter {
+        // SQLite stores epoch doubles. Compare in that same representation and
+        // preserve cached changes on equal ticks, whose ordering is ambiguous.
+        if let atPath = atPath, let fetchedAfter = fetchedAfter, atPath.syncTime.timeIntervalSince1970 >= fetchedAfter.timeIntervalSince1970 {
             return atPath
         }
-        if metadata.ocId.hasPrefix("path:") {
-            if let preservingIdentifier = preservingIdentifier {
-                merged.ocId = preservingIdentifier
-            } else if let existing = itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath))
+        if let preservingIdentifier = preservingIdentifier {
+            merged.ocId = preservingIdentifier
+        } else if let mapped = try providerIdentifier(serverIdentifier: metadata.ocId) {
+            merged.ocId = mapped
+        } else if metadata.ocId.hasPrefix("path:") {
+            if let existing = itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath))
                         ?? itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath) + "/") {
                 merged.ocId = existing.ocId
             } else if let existing = try identity(remotePath: metadata.remotePath), WebDAVItem.path(fromIdentifier: existing.serverIdentifier) != nil {
@@ -312,7 +333,7 @@ actor ItemDatabase {
             }
         }
         if let existing = itemMetadata(ocId: merged.ocId) {
-            if let fetchedAfter = fetchedAfter, existing.syncTime > fetchedAfter { return existing }
+            if let fetchedAfter = fetchedAfter, existing.syncTime.timeIntervalSince1970 >= fetchedAfter.timeIntervalSince1970 { return existing }
             merged.isDownloaded = existing.isDownloaded
             merged.isDownloading = existing.isDownloading
             merged.isUploaded = existing.isUploaded
@@ -321,6 +342,13 @@ actor ItemDatabase {
             merged.statusError = existing.statusError
         }
         try transaction {
+            merged.finderMetadata = try localMetadata(ocId: merged.ocId)
+            let clearsModificationOverride = itemMetadata(ocId: merged.ocId).map { $0.etag != merged.etag } == true
+                && merged.finderMetadata.contentModificationDate != nil
+            if clearsModificationOverride { merged.finderMetadata.contentModificationDate = nil }
+            if clearsModificationOverride {
+                _ = try updateLocalMetadata(ocId: merged.ocId, metadata: merged.finderMetadata, fields: [.contentModificationDate])
+            }
             if let replaced = itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath))
                 ?? itemMetadata(remotePath: Self.normalizedPath(metadata.remotePath) + "/"), replaced.ocId != merged.ocId {
                 // A different stable server identifier at this path is an observed
@@ -329,12 +357,135 @@ actor ItemDatabase {
                 else { try deleteItemMetadata(ocId: replaced.ocId) }
             }
             if let previous = try identity(remotePath: metadata.remotePath), previous.identifier != merged.ocId {
+                try executeBoundUpdate("DELETE FROM identities.recycle_keys WHERE provider_id = ?", values: [previous.identifier])
+                try executeBoundUpdate("DELETE FROM identities.finder_metadata WHERE provider_id = ?", values: [previous.identifier])
                 try executeBoundUpdate("DELETE FROM identities.item_identities WHERE provider_id = ?", values: [previous.identifier])
             }
             try rememberIdentity(merged, serverIdentifier: metadata.ocId)
             try addItemMetadata(merged)
         }
         return merged
+    }
+
+    /// Search results need their actual parent, including ancestors missing from the cache.
+    func mergeSearchResult(_ remote: WebDAVItem, webdav: WebDAVClient, fetchedAfter: Date? = nil) async throws -> ItemMetadata {
+        try Task.checkCancellation()
+        let identifier = try providerIdentifier(serverIdentifier: remote.ocId) ?? remote.ocId
+        if let fetchedAfter, let current = itemMetadata(ocId: identifier), current.syncTime.timeIntervalSince1970 >= fetchedAfter.timeIntervalSince1970 { return current }
+        let parent = try await resolveParent(path: remote.parentPath, webdav: webdav)
+        return try mergeServerMetadata(ItemMetadata(from: remote, parentOcId: parent), fetchedAfter: fetchedAfter)
+    }
+
+    func finderMetadata(ocId: String) throws -> FinderMetadata { try localMetadata(ocId: ocId) }
+
+    private func localMetadata(ocId: String) throws -> FinderMetadata {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT metadata FROM identities.finder_metadata WHERE provider_id = ?", -1, &stmt, nil) == SQLITE_OK else {
+            throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, ocId, -1, SQLITE_TRANSIENT)
+        let result = sqlite3_step(stmt)
+        if result == SQLITE_DONE { return FinderMetadata() }
+        guard result == SQLITE_ROW else { throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db))) }
+        return try JSONDecoder().decode(FinderMetadata.self, from: Data(columnString(stmt, 0).utf8))
+    }
+
+    /// Apply only acknowledged Finder fields. An included nil explicitly clears that field.
+    /// The transaction prevents independent extension processes from losing each other's edits.
+    func updateLocalMetadata(ocId: String, metadata: FinderMetadata, fields: Set<FinderMetadata.Field>) throws -> ItemMetadata? {
+        try transaction {
+            guard var item = itemMetadata(ocId: ocId) else { return nil }
+            var local = try localMetadata(ocId: ocId)
+            let previous = local
+            local.apply(metadata, fields: fields)
+            guard local != previous else { return item }
+            let encoded = try JSONEncoder().encode(local)
+            try executeBoundUpdate("INSERT OR REPLACE INTO identities.finder_metadata(provider_id, metadata) VALUES (?, ?)",
+                                   values: [ocId, String(decoding: encoded, as: UTF8.self)])
+            try executeBoundUpdate("INSERT INTO item_changes(oc_id, parent_oc_id) VALUES (?, ?)", values: [ocId, item.parentOcId])
+            item.finderMetadata = local
+            if fields.contains(.trash) { try rememberRecycleKey(item) }
+            return item
+        }
+    }
+
+    private func providerIdentifier(serverIdentifier: String) throws -> String? {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT provider_id FROM identities.item_identities WHERE server_id = ? LIMIT 1", -1, &stmt, nil) == SQLITE_OK else {
+            throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, serverIdentifier, -1, SQLITE_TRANSIENT)
+        return sqlite3_step(stmt) == SQLITE_ROW ? columnString(stmt, 0) : nil
+    }
+
+    /// Locate a recycle entry using its durable opaque key, never its filename.
+    func identifierForTrashKey(_ key: String) throws -> String? {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT provider_id FROM identities.recycle_keys WHERE recycle_key = ? LIMIT 1", -1, &stmt, nil) == SQLITE_OK else {
+            throw DatabaseError.readFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT)
+        return sqlite3_step(stmt) == SQLITE_ROW ? columnString(stmt, 0) : nil
+    }
+
+    private func rememberRecycleKey(_ metadata: ItemMetadata) throws {
+        let key: String
+        if let trash = metadata.finderMetadata.trash { key = trash.key }
+        else {
+            let raw = metadata.fileId.isEmpty ? (try identity(identifier: metadata.ocId))?.serverIdentifier ?? metadata.ocId : metadata.fileId
+            guard !raw.hasPrefix("path:"), !raw.hasPrefix("local:"), !raw.hasPrefix("trash:") else { return }
+            let server = raw.hasPrefix("fileid:") ? String(raw.dropFirst(7)) : raw
+            key = server.split(separator: "!").last.map(String.init) ?? server
+        }
+        try executeBoundUpdate("INSERT OR REPLACE INTO identities.recycle_keys(provider_id, recycle_key) VALUES (?, ?)", values: [metadata.ocId, key])
+    }
+
+    /// Commit a server trash snapshot only if no later restore/purge won the race.
+    func mergeTrashSnapshot(_ metadata: ItemMetadata, trash: TrashMetadata, fetchedAfter: Date, previousIdentifier: String?) throws -> ItemMetadata? {
+        try transaction {
+            if let previousIdentifier, itemMetadata(ocId: previousIdentifier) == nil { return nil }
+            if let current = itemMetadata(ocId: metadata.ocId), current.syncTime.timeIntervalSince1970 >= fetchedAfter.timeIntervalSince1970 {
+                return current.parentOcId == metadata.parentOcId ? current : nil
+            }
+            return try storeTrashItem(metadata, trash: trash)
+        }
+    }
+
+    /// Keep trash state and parent transition atomic for working-set observers.
+    func storeTrashItem(_ metadata: ItemMetadata, trash: TrashMetadata?) throws -> ItemMetadata {
+        try transaction {
+            var value = metadata
+            value.finderMetadata = try localMetadata(ocId: value.ocId)
+            value.finderMetadata.trash = trash
+            // Preserve the original server ID for stable reconciliation after restore.
+            if try identity(identifier: value.ocId) == nil { try rememberIdentity(value, serverIdentifier: value.ocId) }
+            try addItemMetadata(value)
+            let stored = try updateLocalMetadata(ocId: value.ocId, metadata: value.finderMetadata, fields: [.trash]) ?? value
+            if stored.isDirectory { try setDescendantTrashState(of: stored, trash: trash) }
+            return stored
+        }
+    }
+
+    func setDescendantTrashState(of directory: ItemMetadata, trash: TrashMetadata?) throws {
+        try transaction {
+            var pending = childItems(parentOcId: directory.ocId)
+            while let child = pending.popLast() {
+                if child.isDirectory { pending.append(contentsOf: childItems(parentOcId: child.ocId)) }
+                var local = child.finderMetadata
+                if let trash = trash {
+                    let prefix = directory.remotePath.hasSuffix("/") ? directory.remotePath : directory.remotePath + "/"
+                    guard child.remotePath.hasPrefix(prefix) else { continue }
+                    let suffix = String(child.remotePath.dropFirst(prefix.count))
+                    local.trash = TrashMetadata(key: trash.key + "/" + suffix,
+                        originalPath: trash.originalPath + "/" + suffix, originalParentOcId: child.parentOcId,
+                        deletionDate: trash.deletionDate)
+                } else { local.trash = nil }
+                _ = try updateLocalMetadata(ocId: child.ocId, metadata: local, fields: [.trash])
+            }
+        }
     }
 
     private static func normalizedPath(_ path: String) -> String {
@@ -358,6 +509,7 @@ actor ItemDatabase {
     }
 
     private func rememberIdentity(_ metadata: ItemMetadata, serverIdentifier: String) throws {
+        try rememberRecycleKey(metadata)
         let existing = try identity(identifier: metadata.ocId)
         if existing?.path == Self.normalizedPath(metadata.remotePath), existing?.serverIdentifier == serverIdentifier { return }
         try executeBoundUpdate("INSERT OR REPLACE INTO identities.item_identities(provider_id, remote_path, server_id) VALUES (?, ?, ?)",
@@ -562,6 +714,8 @@ actor ItemDatabase {
     /// Delete item metadata by ocId
     func deleteItemMetadata(ocId: String) throws {
         try transaction {
+            try executeBoundUpdate("DELETE FROM identities.recycle_keys WHERE provider_id = ?", values: [ocId])
+            try executeBoundUpdate("DELETE FROM identities.finder_metadata WHERE provider_id = ?", values: [ocId])
             try executeBoundUpdate("DELETE FROM identities.item_identities WHERE provider_id = ?", values: [ocId])
             try executeBoundUpdate("DELETE FROM items WHERE oc_id = ?", values: [ocId])
         }
@@ -572,6 +726,7 @@ actor ItemDatabase {
         try transaction {
             if let directory = itemMetadata(ocId: ocId) {
                 let prefix = directory.remotePath.hasSuffix("/") ? directory.remotePath : directory.remotePath + "/"
+                try executeBoundUpdate("DELETE FROM identities.finder_metadata WHERE provider_id IN (SELECT provider_id FROM identities.item_identities WHERE provider_id = ? OR substr(remote_path, 1, length(?)) = ?)", values: [ocId, prefix, prefix])
                 try executeBoundUpdate("DELETE FROM identities.item_identities WHERE provider_id = ? OR substr(remote_path, 1, length(?)) = ?", values: [ocId, prefix, prefix])
             }
             let sql = """
@@ -583,6 +738,8 @@ actor ItemDatabase {
                 DELETE FROM items WHERE oc_id IN (SELECT oc_id FROM descendants)
                 """
             try executeBoundUpdate(sql, values: [ocId])
+            try executeUpdate("DELETE FROM identities.recycle_keys WHERE provider_id NOT IN (SELECT provider_id FROM identities.item_identities) AND provider_id NOT IN (SELECT oc_id FROM items)")
+            try executeUpdate("DELETE FROM identities.finder_metadata WHERE provider_id NOT IN (SELECT provider_id FROM identities.item_identities) AND provider_id NOT IN (SELECT oc_id FROM items)")
         }
     }
 
@@ -699,6 +856,8 @@ actor ItemDatabase {
     /// Clear all items (for re-enumeration)
     func clearAll() throws {
         try transaction {
+            try executeUpdate("DELETE FROM identities.recycle_keys")
+            try executeUpdate("DELETE FROM identities.finder_metadata")
             try executeUpdate("DELETE FROM identities.item_identities")
             try executeUpdate("DELETE FROM items")
         }
@@ -886,7 +1045,8 @@ actor ItemDatabase {
             isUploading: isUploading,
             status: status,
             statusError: statusError,
-            syncTime: syncTime
+            syncTime: syncTime,
+            finderMetadata: (try? localMetadata(ocId: ocId)) ?? FinderMetadata()
         )
     }
 }

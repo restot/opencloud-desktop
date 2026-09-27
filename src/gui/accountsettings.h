@@ -57,12 +57,14 @@ class OPENCLOUD_GUI_EXPORT AccountSettings : public QWidget
     Q_PROPERTY(QChar accountStateIconGlype READ accountStateIconGlype NOTIFY connectionLabelChanged)
     Q_PROPERTY(QSet<Notification> notifications READ notifications NOTIFY notificationsChanged)
     Q_PROPERTY(bool useFileProvider READ useFileProvider CONSTANT)
+    Q_PROPERTY(QString onDemandSyncStatus READ onDemandSyncStatus NOTIFY onDemandSyncStatusChanged)
     OC_DECLARE_WIDGET_FOCUS
     QML_ELEMENT
     QML_UNCREATABLE("C++ only")
 
 public:
     bool useFileProvider() const;
+    QString onDemandSyncStatus() const;
     enum class ModalWidgetSizePolicy { Minimum = QSizePolicy::Minimum, Expanding = QSizePolicy::Expanding };
     Q_ENUM(ModalWidgetSizePolicy)
 
@@ -90,6 +92,7 @@ Q_SIGNALS:
     void syncedSpacesChanged();
     void connectionLabelChanged();
     void notificationsChanged();
+    void onDemandSyncStatusChanged();
 
 public Q_SLOTS:
     void slotAccountStateChanged();

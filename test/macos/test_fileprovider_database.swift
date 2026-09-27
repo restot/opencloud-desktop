@@ -53,6 +53,12 @@ struct DatabaseTests {
         let started = Date.distantPast
         _ = try await database.mergeServerMetadata(metadata("file", etag: "stale"), fetchedAfter: started)
         require(await database.itemMetadata(ocId: "file")?.etag == "v2", "Ignore stale server responses")
+        let sameTick = await database.itemMetadata(ocId: "file")!.syncTime
+        let samePath = try await database.mergeServerMetadata(metadata("file", etag: "same-tick-stale"), fetchedAfter: sameTick)
+        require(samePath.etag == "v2", "Equal persisted timestamps must preserve the cached item at its path")
+        let staleMove = try await database.mergeServerMetadata(metadata("file", path: "/stale-move", etag: "same-tick-stale"), fetchedAfter: sameTick)
+        require(staleMove.etag == "v2" && staleMove.remotePath == samePath.remotePath,
+                "Equal persisted timestamps must preserve a cached identifier at a different path")
         try await database.addItemMetadata(metadata("file", parent: "new-parent", etag: "v3"))
         try await database.deleteIfUnchanged(stale)
         require(await database.itemMetadata(ocId: "file") != nil, "Stale directory response must not delete a moved item")
@@ -150,6 +156,46 @@ struct DatabaseTests {
             pages += 1
         } while cursor != nil
         require(pages == 3 && pagedIDs.count == 1203, "Large item enumeration must deliver every item once")
+        // Finder metadata has its own durable, account-private store.
+        let finder = try ItemDatabase(containerURL: container, domainIdentifier: "finder")
+        _ = try await finder.mergeServerMetadata(metadata("finder-file"))
+        let finderAnchor = try await finder.currentSyncAnchor()
+        var local = FinderMetadata()
+        local.tagData = Data([0, 255, 7])
+        local.lastUsedDate = Date(timeIntervalSince1970: 1234)
+        local.creationDate = Date(timeIntervalSince1970: 12)
+        local.contentModificationDate = Date(timeIntervalSince1970: 34)
+        local.contentPolicy = 3
+        local.fileSystemFlags = 17
+        local.extendedAttributes = ["com.example.finder": Data([255, 0])]
+        let finderFields: Set<FinderMetadata.Field> = [.tagData, .lastUsedDate, .contentPolicy, .fileSystemFlags, .extendedAttributes, .creationDate, .contentModificationDate]
+        let updatedFinder = try await finder.updateLocalMetadata(ocId: "finder-file", metadata: local, fields: finderFields)
+        require(updatedFinder?.finderMetadata == local, "Finder fields must be returned after persistence")
+        let finderChanges = try await finder.changes(since: finderAnchor, parentOcId: nil)
+        require(finderChanges.updated.first?.finderMetadata == local, "Finder metadata changes must be journaled")
+        _ = try await finder.updateLocalMetadata(ocId: "finder-file", metadata: local, fields: finderFields)
+        require(try await finder.currentSyncAnchor() == finderChanges.anchor, "Identical Finder metadata must not advance the anchor")
+        let refreshedFinder = try await finder.mergeServerMetadata(metadata("finder-file", path: "/renamed-finder", etag: "v2"))
+        local.contentModificationDate = nil
+        require(refreshedFinder.finderMetadata == local, "Server refresh and move must preserve private Finder metadata")
+        let reopenedFinder = try ItemDatabase(containerURL: container, domainIdentifier: "finder")
+        _ = try await reopenedFinder.updateLocalMetadata(ocId: "finder-file", metadata: FinderMetadata(), fields: [.tagData])
+        local.tagData = nil
+        require(await finder.itemMetadata(ocId: "finder-file")?.finderMetadata == local, "Explicit clears from another instance must preserve independent fields")
+        // Simulate loss of the replaceable cache while retaining the durable identity database.
+        let finderCache = container.appendingPathComponent("FileProvider/items-finder.sqlite")
+        var cacheHandle: OpaquePointer?
+        require(sqlite3_open(finderCache.path, &cacheHandle) == SQLITE_OK, "Open cache for loss simulation")
+        require(sqlite3_exec(cacheHandle, "DELETE FROM items", nil, nil, nil) == SQLITE_OK, "Discard cache rows")
+        sqlite3_close(cacheHandle)
+        let recoveredFinder = try await reopenedFinder.mergeServerMetadata(metadata("finder-file", path: "/renamed-finder"))
+        require(recoveredFinder.finderMetadata == local, "Cache recovery must preserve private Finder metadata")
+        _ = try await reopenedFinder.mergeServerMetadata(metadata("replacement", path: "/renamed-finder"))
+        _ = try await reopenedFinder.mergeServerMetadata(metadata("finder-file", path: "/other"))
+        require(await reopenedFinder.itemMetadata(ocId: "finder-file")?.finderMetadata == FinderMetadata(), "Replacement must retire old private metadata")
+        let isolatedFinder = try ItemDatabase(containerURL: container, domainIdentifier: "finder-other")
+        let isolatedItem = try await isolatedFinder.mergeServerMetadata(metadata("finder-file"))
+        require(isolatedItem.finderMetadata == FinderMetadata(), "Finder metadata must stay private to its domain")
         print("FileProvider database regression tests passed")
     }
 }

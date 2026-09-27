@@ -79,6 +79,16 @@ class ClientCommunicationService: NSObject, NSFileProviderServiceSource, NSXPCLi
     
     // MARK: - ClientCommunicationProtocol
     
+    func getSyncStatus(completionHandler: @escaping ([String: Any]?, Error?) -> Void) {
+        guard let provider = fpExtension else {
+            completionHandler(nil, NSFileProviderError(.providerNotFound))
+            return
+        }
+        provider.syncStatus.snapshot(isAuthenticated: provider.isAuthenticated) { snapshot in
+            completionHandler(snapshot, nil)
+        }
+    }
+
     func getFileProviderDomainIdentifier(completionHandler: @escaping (String?, Error?) -> Void) {
         guard let fpExtension = fpExtension else {
             completionHandler(nil, NSFileProviderError(.providerNotFound))
